@@ -578,6 +578,10 @@ import random
 import time
 import heapq
 from typing import List, Optional, Tuple, Set
+from star_predictor import predict_star
+from planner import a_star
+from features import extract_features
+from policy import score_features, default_weights
 
 from api import SnakeFieldAPI
 from data_structures import Direction
@@ -1004,24 +1008,21 @@ def compute_direction_master(
         # Use dead_hazard as blocked cells for pocket calculation to avoid pockets blocked by dead bodies
         pocket_volume = _calculate_dynamic_pocket(next_pos, clear_time, dead_hazard, bad_apple_set, width, height, max_safety_check)
 
-        # If a star is about to spawn soon and there are currently no stars, prefer open pockets
-        if anticipate_star and not stars:
-            # prefer known spawn points if available
-            if star_spawn_points:
-                # reward being close to the nearest spawn point
-                dists = [_manhattan_distance(next_pos, sp, field_size) for sp in star_spawn_points]
-                nearest = min(dists) if dists else 999
-                reward = max(0, spawn_weight - nearest * 6000)
-                score += reward
-                score += pocket_volume * (preposition_weight // 2)
-                logger.debug("Prepositioning: next_pos=%s nearest_spawn_dist=%s spawn_reward=%s pocket_bonus=%s", next_pos, nearest, reward, pocket_volume * (preposition_weight // 2))
-            else:
-                # Strongly reward positions with large pocket volume (pre-positioning)
-                score += pocket_volume * preposition_weight
-                # Prefer closer to center (generally safer and more reachable)
-                center = (width // 2, height // 2)
-                center_dist = _manhattan_distance(next_pos, center, field_size)
-                score += max(0, 8000 - center_dist * 400)
+        # Feature-based linear scoring (concise policy)
+        try:
+            features = extract_features(next_pos, head, stars, apples, other_snake_infos, pocket_volume, dead_hazard, star_spawn_points or [], field_size, current_direction, consecutive_same_streak)
+            weights = default_weights()
+            # override a few weights from CLI tunables
+            weights['pocket'] = float(preposition_weight)
+            weights['dist_to_spawn'] = -float(spawn_weight)
+            weights['opponent_in_attack_window'] = -float(aggressive_zone_penalty)
+            weights['dead_hazard'] = -float(max(aggressive_zone_penalty, abs(weights.get('dead_hazard',0))))
+            lin_score = score_features(features, weights)
+            score += lin_score
+            if anticipate_star and not stars:
+                logger.debug("Prepositioning features=%s lin_score=%.1f", {k:features[k] for k in ['dist_to_spawn','pocket'] if k in features}, lin_score)
+        except Exception:
+            pass
 
         if one_vs_one and other_snake_infos:
             opp_info = other_snake_infos[0]

@@ -6,6 +6,9 @@ from typing import List, Optional, Tuple, Set
 
 from api import SnakeFieldAPI
 from data_structures import Direction
+from rl_agent import RLAgent
+from policy import default_weights
+from features import extract_features
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -470,6 +473,9 @@ if __name__ == "__main__":
     parser.add_argument("--password", default="test", help="Password for server")
     parser.add_argument("--base_url", default="http://localhost:3030",
                         help="Base URL of the game server (default: http://localhost:3030)")
+    parser.add_argument("--enable-rl", action="store_true", help="Enable online RL learning (REINFORCE) during matches")
+    parser.add_argument("--rl-learning-rate", type=float, default=1e-4, help="RL online learning rate")
+    parser.add_argument("--rl-save-file", type=str, default="rl_weights.json", help="Path to save RL weights")
     args = parser.parse_args()
 
     team_name = args.team_name
@@ -477,10 +483,23 @@ if __name__ == "__main__":
     game_name = args.game_name
     password = args.password
 
+    # RL agent optional
+    agent = None
+    if args.enable_rl:
+        feature_keys = list(default_weights().keys())
+        agent = RLAgent(feature_keys, lr=args.rl_learning_rate, save_path=args.rl_save_file)
+
     alive = True
     currentDirection: Direction = "NORTH"
     move_count = 0
     recalc_interval = 1  # Recalculate strategy every move
+    # RL bookkeeping
+    last_candidate_features = None
+    last_action_idx = None
+    prev_my_length = None
+    prev_num_opponents = None
+    consecutive_same_streak = 0
+    last_direction = currentDirection
 
     api = SnakeFieldAPI(base_url, team_name, game_name, password)
 
@@ -573,23 +592,112 @@ if __name__ == "__main__":
             attack_mode = True
 
         move_count += 1
-        if move_count % recalc_interval == 0:
-            currentDirection = compute_direction_toward_nearest_apple(
-                head=head,
-                apples=apples,
-                current_direction=currentDirection,
-                other_snakes=other_snakes,
-                field_size=getattr(field, "size", (20, 20)),
-                my_body=my_snake.body,
-                winning_snake_head=winning_snake_head,
-                attack_mode=attack_mode,
-                dead_snakes=dead_snakes,
-                bad_apples=bad_apples,
-            )
+        # If RL is enabled, perform per-tick update from last action and select new action via policy
+        if args.enable_rl:
+            # compute reward for previous action (if any) using observed state changes
+            if last_action_idx is not None and prev_my_length is not None and prev_num_opponents is not None and agent is not None:
+                reward = 0.0
+                # growth indicates apple eaten or kill
+                if len(my_snake.body) > prev_my_length:
+                    reward += (len(my_snake.body) - prev_my_length) * 10.0
+                # opponent died
+                if len(other_snakes) < prev_num_opponents:
+                    reward += (prev_num_opponents - len(other_snakes)) * 50.0
+                # small living bonus to encourage survival
+                reward += 0.1
+                try:
+                    agent.update_step(last_candidate_features, last_action_idx, reward)
+                except Exception:
+                    pass
+
+            # build candidate features for 4 possible moves
+            width, height = getattr(field, "size", (20, 20))
+            obstacle_cells = set(my_snake.body[:-1])
+            for s in other_snakes:
+                obstacle_cells.update(s[:-1])
+            for ds in dead_snakes:
+                obstacle_cells.update(ds)
+            dead_hazard_set = set(cell for ds in dead_snakes for cell in ds)
+
+            candidate_features = []
+            directions_order = ["NORTH", "EAST", "SOUTH", "WEST"]
+            for d in directions_order:
+                if is_reverse_direction(d, currentDirection):
+                    # still include the feature but mark as very low pocket
+                    candidate_features.append({})
+                    continue
+                v = _DIRECTION_VECTORS[d]
+                next_pos = ((head[0] + v[0]) % width, (head[1] + v[1]) % height)
+                pocket = _calculate_pocket_volume(next_pos, obstacle_cells, width, height, min(30, len(my_snake.body) + 5))
+                opp_info = [{"head": s[0], "len": len(s)} for s in other_snakes if s]
+                f = extract_features(next_pos, head, [], apples, opp_info, pocket, dead_hazard_set, [], (width, height), currentDirection, consecutive_same_streak)
+                # explicit bad apple flag
+                f['bad_apple_here'] = 1.0 if next_pos in set(bad_apples) else 0.0
+                candidate_features.append(f)
+
+            # choose action via agent
+            if agent is not None:
+                try:
+                    act_idx = agent.select_action(candidate_features, deterministic=False)
+                    chosen_dir = directions_order[act_idx]
+                    currentDirection = chosen_dir
+                    last_candidate_features = candidate_features
+                    last_action_idx = act_idx
+                except Exception:
+                    # fallback to heuristic
+                    currentDirection = compute_direction_toward_nearest_apple(
+                        head=head,
+                        apples=apples,
+                        current_direction=currentDirection,
+                        other_snakes=other_snakes,
+                        field_size=getattr(field, "size", (20, 20)),
+                        my_body=my_snake.body,
+                        winning_snake_head=winning_snake_head,
+                        attack_mode=attack_mode,
+                        dead_snakes=dead_snakes,
+                        bad_apples=bad_apples,
+                    )
+            else:
+                currentDirection = compute_direction_toward_nearest_apple(
+                    head=head,
+                    apples=apples,
+                    current_direction=currentDirection,
+                    other_snakes=other_snakes,
+                    field_size=getattr(field, "size", (20, 20)),
+                    my_body=my_snake.body,
+                    winning_snake_head=winning_snake_head,
+                    attack_mode=attack_mode,
+                    dead_snakes=dead_snakes,
+                    bad_apples=bad_apples,
+                )
+            # store previous state snapshot for next-tick reward calculation
+            prev_my_length = len(my_snake.body)
+            prev_num_opponents = len(other_snakes)
+        else:
+            if move_count % recalc_interval == 0:
+                currentDirection = compute_direction_toward_nearest_apple(
+                    head=head,
+                    apples=apples,
+                    current_direction=currentDirection,
+                    other_snakes=other_snakes,
+                    field_size=getattr(field, "size", (20, 20)),
+                    my_body=my_snake.body,
+                    winning_snake_head=winning_snake_head,
+                    attack_mode=attack_mode,
+                    dead_snakes=dead_snakes,
+                    bad_apples=bad_apples,
+                )
 
         if currentDirection not in ("NORTH", "SOUTH", "EAST", "WEST"):
             logger.warning("Computed invalid direction %s, forcing fallback NORTH", currentDirection)
             currentDirection = "NORTH"
+
+        # Update repeat-streak bookkeeping for feature extractor
+        if currentDirection == last_direction:
+            consecutive_same_streak += 1
+        else:
+            consecutive_same_streak = 0
+        last_direction = currentDirection
 
         if not api.set_direction(currentDirection):
             logger.warning("Failed to update direction to %s", currentDirection)
