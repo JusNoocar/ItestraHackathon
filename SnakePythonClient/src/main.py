@@ -1,7 +1,7 @@
 import argparse
 import logging
 import time
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from api import SnakeFieldAPI
 from data_structures import Direction
@@ -26,6 +26,19 @@ def is_reverse_direction(direction: Direction, current_direction: Direction) -> 
 
 def _manhattan_distance(a: Coord, b: Coord) -> int:
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def _normalize_coord(value) -> Optional[Coord]:
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        x, y = value
+        if isinstance(x, int) and isinstance(y, int):
+            return (x, y)
+    if isinstance(value, dict):
+        x = value.get("x") if "x" in value else value.get("col")
+        y = value.get("y") if "y" in value else value.get("row")
+        if isinstance(x, int) and isinstance(y, int):
+            return (x, y)
+    return None
 
 
 def _apple_safety_penalty(apple: Coord, other_snakes: List[List[Coord]], safe_distance: int = 5) -> int:
@@ -59,6 +72,10 @@ def compute_direction_toward_nearest_apple(
     if not apples:
         return current_direction
 
+    normalized_apples = [apple for apple in (_normalize_coord(item) for item in apples) if apple]
+    if not normalized_apples:
+        return current_direction
+
     other_snakes = other_snakes or []
 
     def apple_cost(apple: Coord) -> int:
@@ -66,7 +83,7 @@ def compute_direction_toward_nearest_apple(
         safety_penalty = _apple_safety_penalty(apple, other_snakes)
         return distance + safety_penalty
 
-    target = min(apples, key=apple_cost)
+    target = min(normalized_apples, key=apple_cost)
     dx = target[0] - head[0]
     dy = target[1] - head[1]
 
