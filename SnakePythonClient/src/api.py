@@ -47,11 +47,24 @@ class SnakeFieldAPI:
             return None
 
     def set_direction(self, direction: Direction) -> bool:
+        if direction not in ("NORTH", "SOUTH", "EAST", "WEST"):
+            logger.warning("Attempted to set invalid direction: %s", direction)
+            return False
+
         url = self._url(f"/games/{self.game_name}/snake/direction")
         payload = {"direction": direction}
         try:
             resp = self.session.post(url, json=payload, timeout=self.timeout)
-            resp.raise_for_status()
+            try:
+                resp.raise_for_status()
+            except RequestException as exc:
+                logger.warning(
+                    "Failed to set direction %s: status=%s body=%s",
+                    direction,
+                    resp.status_code,
+                    resp.text,
+                )
+                return False
             return True
         except RequestException as exc:
             logger.warning("Failed to set direction %s: %s", direction, exc)
