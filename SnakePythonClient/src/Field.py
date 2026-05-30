@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 from data_structures import Coord, TeamName
@@ -41,6 +41,7 @@ def fill_info_from_source(source) -> [SnakeInfo]:
 class Field:
     size: Tuple[int, int]
     snakes: Dict[TeamName, SnakeInfo]
+    apples: List[Coord] = field(default_factory=list)
 
     @staticmethod
     def from_dict(raw: dict) -> "Field":
@@ -53,4 +54,12 @@ class Field:
             source = raw["snakes"]
             snakes = fill_info_from_source(source)
 
-        return Field(size=size, snakes=snakes)
+        apples = []
+        if "apples" in raw:
+            apples = [tuple(coord) for coord in raw["apples"]]
+        elif "food" in raw:
+            apples = [tuple(coord) for coord in raw["food"]]
+        elif "items" in raw and isinstance(raw["items"], list):
+            apples = [tuple(coord) for coord in raw["items"] if isinstance(coord, (list, tuple))]
+
+        return Field(size=size, snakes=snakes, apples=apples)

@@ -1,9 +1,13 @@
 import argparse
+import logging
 import time
 from typing import List, Tuple
 
 from api import SnakeFieldAPI
 from data_structures import Direction
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 Coord = Tuple[int, int]
 
@@ -100,9 +104,34 @@ if __name__ == "__main__":
     api = SnakeFieldAPI(base_url, team_name, game_name, password)
 
     # initial posting to register
-    api.set_direction(currentDirection)
+    if not api.set_direction(currentDirection):
+        logger.warning("Initial direction registration failed, continuing anyway")
 
     while alive:
         time.sleep(0.5)  # avoid rate limiting error
         field = api.get_field()
-        api.set_direction(currentDirection)
+        if field is None:
+            continue
+
+        my_snake = field.snakes.get(team_name)
+        if not my_snake or not my_snake.alive:
+            alive = False
+            break
+
+        head = my_snake.body[0]
+        apples = getattr(field, "apples", [])
+        other_snakes = [
+            snake.body
+            for snake_name, snake in field.snakes.items()
+            if snake_name != team_name and snake.alive
+        ]
+
+        currentDirection = compute_direction_toward_nearest_apple(
+            head,
+            apples,
+            currentDirection,
+            other_snakes,
+        )
+
+        if not api.set_direction(currentDirection):
+            logger.warning("Failed to update direction to %s", currentDirection)

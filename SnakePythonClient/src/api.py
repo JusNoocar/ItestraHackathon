@@ -5,6 +5,7 @@ from typing import Optional
 
 import requests
 from requests import Session
+from requests.exceptions import RequestException
 
 from Field import Field
 from data_structures import Direction, ItemKind
@@ -34,16 +35,27 @@ class SnakeFieldAPI:
     def _url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
-    def get_field(self) -> Field:
+    def get_field(self) -> Optional[Field]:
         url = self._url(f"/games/{self.game_name}/state")
-        resp = self.session.get(url, timeout=self.timeout)
-        data = resp.json()
-        return Field.from_dict(data)
+        try:
+            resp = self.session.get(url, timeout=self.timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            return Field.from_dict(data)
+        except RequestException as exc:
+            logger.warning("Failed to fetch field state: %s", exc)
+            return None
 
-    def set_direction(self, direction: Direction) -> None:
+    def set_direction(self, direction: Direction) -> bool:
         url = self._url(f"/games/{self.game_name}/snake/direction")
         payload = {"direction": direction}
-        self.session.post(url, json=payload, timeout=self.timeout)
+        try:
+            resp = self.session.post(url, json=payload, timeout=self.timeout)
+            resp.raise_for_status()
+            return True
+        except RequestException as exc:
+            logger.warning("Failed to set direction %s: %s", direction, exc)
+            return False
 
     def activate_item(self, item: ItemKind) -> None:
         url = self._url(f"/games/{self.game_name}/snake/activate")
