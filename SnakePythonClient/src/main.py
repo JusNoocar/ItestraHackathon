@@ -756,6 +756,7 @@ def compute_direction_master(
     winning_snake_head: Optional[Coord] = None,
     attack_mode: bool = False,
     dead_snakes: List[List[Coord]] = None,
+    ticks_until_star: Optional[int] = None,
 ) -> str:
     
     width, height = field_size
@@ -765,6 +766,11 @@ def compute_direction_master(
     stars = stars or []
     my_body = my_body or [head]
     my_length = len(my_body)
+
+    # interpret tick timing: if a star is due within a short window, bias movement
+    anticipate_star = False
+    if isinstance(ticks_until_star, int):
+        anticipate_star = ticks_until_star <= 3
 
     current_direction = to_internal_str(current_direction_raw)
     current_direction = _infer_current_direction(head, my_body, width, height, current_direction)
@@ -952,6 +958,15 @@ def compute_direction_master(
         max_safety_check = max(my_length + 5, 15)
         pocket_volume = _calculate_dynamic_pocket(next_pos, clear_time, dead_cells, bad_apple_set, width, height, max_safety_check)
 
+        # If a star is about to spawn soon and there are currently no stars, prefer open pockets
+        if anticipate_star and not stars:
+            # Strongly reward positions with large pocket volume (pre-positioning)
+            score += pocket_volume * 25000
+            # Prefer closer to center (generally safer and more reachable)
+            center = (width // 2, height // 2)
+            center_dist = _manhattan_distance(next_pos, center, field_size)
+            score += max(0, 8000 - center_dist * 400)
+
         if one_vs_one and other_snake_infos:
             opp_info = other_snake_infos[0]
             opp_head = opp_info.get("head")
@@ -1104,6 +1119,7 @@ if __name__ == "__main__":
     alive = True
     currentDirectionStr = "NORTH"
     same_direction_count = 0
+    tick_counter = 0  # local tick/frame counter to predict periodic star spawns
 
     api.set_direction(to_api_direction(currentDirectionStr))
 
@@ -1113,6 +1129,9 @@ if __name__ == "__main__":
             field = api.get_field()
             if field is None: 
                 continue
+            tick_counter += 1
+            # predict ticks until next star spawn (stars spawn every 15 ticks)
+            ticks_until_next_star = (15 - (tick_counter % 15)) % 15
 
             my_snake = field.snakes.get(args.team_name)
             if not my_snake or not my_snake.alive: 
@@ -1249,7 +1268,8 @@ if __name__ == "__main__":
                 my_body=my_snake.body,
                 winning_snake_head=winning_snake_head,
                 attack_mode=attack_mode,
-                dead_snakes=dead_snakes
+                dead_snakes=dead_snakes,
+                ticks_until_star=ticks_until_next_star,
             )
             same_direction_count = same_direction_count + 1 if next_direction == currentDirectionStr else 0
             currentDirectionStr = next_direction
