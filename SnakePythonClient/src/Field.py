@@ -42,6 +42,7 @@ class Field:
     size: Tuple[int, int]
     snakes: Dict[TeamName, SnakeInfo]
     apples: List[Coord] = field(default_factory=list)
+    bad_apples: List[Coord] = field(default_factory=list)
 
     @staticmethod
     def from_dict(raw: dict) -> "Field":
@@ -55,11 +56,21 @@ class Field:
             snakes = fill_info_from_source(source)
 
         apples = []
+        bad_apples = []
+        
         if "apples" in raw:
-            apples = [tuple(coord) for coord in raw["apples"]]
-        elif "food" in raw:
-            apples = [tuple(coord) for coord in raw["food"]]
-        elif "items" in raw and isinstance(raw["items"], list):
-            apples = [tuple(coord) for coord in raw["items"] if isinstance(coord, (list, tuple))]
+            apples = [tuple(c) for c in raw["apples"]]
+        
+        if "items" in raw and isinstance(raw["items"], list):
+            for entry in raw["items"]:
+                # entry is [ [x, y], 'Type' ]
+                if isinstance(entry, list) and len(entry) == 2:
+                    coord_list, item_type = entry
+                    coord = tuple(coord_list)
+                    
+                    if item_type == 'Apple':
+                        apples.append(coord)
+                    elif item_type == 'BadApple':
+                        bad_apples.append(coord)
 
-        return Field(size=size, snakes=snakes, apples=apples)
+        return Field(size=size, snakes=snakes, apples=apples, bad_apples=bad_apples)
