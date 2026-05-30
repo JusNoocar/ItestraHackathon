@@ -304,12 +304,8 @@ def _normalize_coord(value) -> Optional[Coord]:
 
 
 def _count_free_spaces_3_steps(start_pos: Coord, obstacle_cells: Set[Coord], width: int, height: int) -> int:
-    """Calculates the precise number of unique reachable empty spaces within a 3-step horizon
-
-    Using a bounded BFS ensures accurate survival space assessment without double-counting.
-    """
+    """Calculates the precise number of unique reachable empty spaces within a 3-step horizon."""
     visited = {start_pos}
-    # Elements in queue: (current_position, current_depth)
     queue = [(start_pos, 0)]
     head_idx = 0
     
@@ -326,8 +322,32 @@ def _count_free_spaces_3_steps(start_pos: Coord, obstacle_cells: Set[Coord], wid
                 visited.add(nxt)
                 queue.append((nxt, depth + 1))
                 
-    # Return count of unique reachable spaces (excluding the starting evaluated position itself)
     return len(visited) - 1
+
+
+def _calculate_pocket_volume(start_pos: Coord, obstacle_cells: Set[Coord], width: int, height: int, max_cells_needed: int) -> int:
+    """Performs an optimistic escape flood-fill to measure available space."""
+    if start_pos in obstacle_cells:
+        return 0
+        
+    visited = {start_pos}
+    queue = [start_pos]
+    head_idx = 0
+    
+    while head_idx < len(queue):
+        curr = queue[head_idx]
+        head_idx += 1
+        
+        if len(visited) >= max_cells_needed:
+            return len(visited)
+            
+        for v in _DIRECTION_VECTORS.values():
+            nxt = ((curr[0] + v[0]) % width, (curr[1] + v[1]) % height)
+            if nxt not in obstacle_cells and nxt not in visited:
+                visited.add(nxt)
+                queue.append(nxt)
+                
+    return len(visited)
 
 
 def compute_direction_toward_nearest_apple(
@@ -341,8 +361,8 @@ def compute_direction_toward_nearest_apple(
     attack_mode: bool = False,
     dead_snakes: List[List[Coord]] = None,
 ) -> Direction:
-    """Calculates the ultimate strategic move incorporating 3-step predictive survival,
-    toroidal apple clustering, static dead snake avoidance, and dynamic game theory.
+    """Balanced tactical matrix designed to prioritize hyper-aggressive apple harvesting,
+    while utilizing an optimistic volume filter to prevent both traps and paralysis.
     """
     width, height = field_size
     other_snakes = other_snakes or []
@@ -351,7 +371,8 @@ def compute_direction_toward_nearest_apple(
     my_length = len(my_body)
     my_tail = my_body[-1] if len(my_body) > 1 else head
 
-    # Gather lethal obstacles (Include our body segments except our tail tip which moves)
+    # 1. CORE OBSTACLE GENERATION
+    # For critical survival checks, we include our segments except the moving tail tip.
     obstacle_cells = set()
     for segment in my_body[:-1]:
         obstacle_cells.add(segment)
@@ -359,75 +380,80 @@ def compute_direction_toward_nearest_apple(
     opponent_heads = set()
     opponent_lengths = {}
     
-    # 1. Process ALIVE opponents (Bodies are obstacles, heads are dynamic threats)
     for snake_body in other_snakes:
         if not snake_body:
             continue
         opponent_heads.add(snake_body[0])
         opponent_lengths[snake_body[0]] = len(snake_body)
-        for segment in snake_body[:-1]:  # Skip tail tip because alive snakes move forward
+        for segment in snake_body[:-1]:
             obstacle_cells.add(segment)
 
-    # 2. Process DEAD opponents (Treat entire body as static, solid walls)
     for snake_body in dead_snakes:
         if not snake_body:
             continue
-        for segment in snake_body:  # Include ALL segments; dead snakes do not move out of the way
+        for segment in snake_body:
             obstacle_cells.add(segment)
+
+    # 2. OPTIMISTIC FLOOD-FILL OBSTACLE GENERATION
+    # To prevent paralysis, we assume our own tail segments are going to move out of the way.
+    # We remove the last 35% of our body from the pocket calculation to keep paths open.
+    pocket_obstacles = set(obstacle_cells)
+    clearance_count = max(1, int(my_length * 0.35))
+    if my_length > 4:
+        for segment in my_body[-clearance_count:]:
+            if segment in pocket_obstacles:
+                pocket_obstacles.remove(segment)
 
     best_direction = current_direction
     best_score = -float("inf")
 
     normalized_apples = [apple for apple in (_normalize_coord(item) for item in apples) if apple]
 
-    # --- TOROIDAL APPLE CLUSTERING ALG ---
-    cluster_center = None
-    if normalized_apples:
-        best_cluster_count = -1
-        for app in normalized_apples:
-            count = sum(1 for other in normalized_apples if _manhattan_distance(app, other, field_size) <= 3)
-            if count > best_cluster_count:
-                best_cluster_count = count
-                cluster_center = app
-
-    # Evaluate all 4 physical directions
+    # Evaluate directions
     for direction, vector in _DIRECTION_VECTORS.items():
         if is_reverse_direction(direction, current_direction):
             continue
 
         next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
 
-        # Immediate Collision Check (Includes dead snake bodies now)
         if next_pos in obstacle_cells:
-            if attack_mode and next_pos == winning_snake_head:
-                pass  # Kamikaze strike allowed on alive winner
-            else:
-                continue
+            continue
 
         score = 0
 
-        # 3-Step Predictive Mobility Evaluation (Now automatically paths around dead bodies)
+        # 1. 3-Step Horizon Mobility
         free_mobility = _count_free_spaces_3_steps(next_pos, obstacle_cells, width, height)
-        score += free_mobility * 65  
+        score += free_mobility * 50  
 
-        # Head-Collision Game Theory (Only applied to dynamic ALIVE heads)
+        # 2. OPTIMISTIC POCKET FILTER
+        # On a small 10x10 map, cap the maximum space we look for so we don't over-engineer safety.
+        # We need at least 8 open spaces to comfortably coil or turn around.
+        required_escape_volume = min(8, my_length + 1)
+        pocket_volume = _calculate_pocket_volume(next_pos, pocket_obstacles, width, height, required_escape_volume)
+        
+        if pocket_volume < required_escape_volume:
+            # If the pocket is genuinely tiny (like a 2-tile dead end), avoid it!
+            score -= 3000 
+        else:
+            # Reward wide-open tactical mobility lanes
+            score += pocket_volume * 10
+
+        # 3. Head-On Mutual Suicide Prevention
         for opp_head in opponent_heads:
             if _manhattan_distance(next_pos, opp_head, field_size) == 1:
                 if attack_mode and opp_head == winning_snake_head:
                     score += 5000  
-                elif my_length > opponent_lengths.get(opp_head, 0):
-                    score += 400   # Bully smaller snakes
                 else:
-                    score -= 1000  # Flee from larger snakes
+                    score -= 4000  # Highly penalized to prevent intentional ties
 
-        # Strategy Routines
+        # 4. Strategy Engines
         if attack_mode and winning_snake_head:
             dist_to_winner = _manhattan_distance(next_pos, winning_snake_head, field_size)
             score += (100 - dist_to_winner) * 100
             if next_pos == winning_snake_head:
                 score += 500000
         else:
-            # Filter for completely uncontested food (Dead snakes don't race for food)
+            # Filter for completely uncontested food
             viable_apples = []
             for app in normalized_apples:
                 our_dist = _manhattan_distance(head, app, field_size)
@@ -442,22 +468,21 @@ def compute_direction_toward_nearest_apple(
             target_apples = viable_apples if viable_apples else normalized_apples
             
             if target_apples:
+                # MAXIMUM PRIORITY: Aggressive Apple Collection
                 closest_apple = min(target_apples, key=lambda a: _manhattan_distance(next_pos, a, field_size))
                 dist_to_apple = _manhattan_distance(next_pos, closest_apple, field_size)
-                score += (100 - dist_to_apple) * 20
+                score += (100 - dist_to_apple) * 150  # Increased to 150 to heavily prioritize apple racing
 
-                # PHASE 2: Perimeter Control & Cluster Magnet Mechanics
-                if my_length >= 10:
-                    if cluster_center:
-                        dist_to_cluster = _manhattan_distance(next_pos, cluster_center, field_size)
-                        score += (50 - dist_to_cluster) * 15  
-                    
-                    adjacent_to_self = sum(1 for cell in my_body[3:] if _manhattan_distance(next_pos, cell, field_size) == 1)
-                    score += adjacent_to_self * 60
+                # Active Opponent Blocking / Cutting off lanes
+                for opp_head in opponent_heads:
+                    dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
+                    if dist_to_opp == 2:  
+                        score += 60  
             else:
-                # Tail Chase Safe Loop
+                # ANTI-SELF-LOOP PROTOCOL
+                # Only if there are zero apples on earth, look to step away from our own tail.
                 dist_to_tail = _manhattan_distance(next_pos, my_tail, field_size)
-                score += (100 - dist_to_tail) * 30
+                score += dist_to_tail * 20  
 
         if score > best_score:
             best_score = score
@@ -513,14 +538,12 @@ if __name__ == "__main__":
         head = my_snake.body[0]
         apples = getattr(field, "apples", [])
         
-        # Parse ALIVE opponents
         other_snakes = [
             snake.body
             for snake_name, snake in field.snakes.items()
             if snake_name != team_name and snake.alive
         ]
 
-        # Parse DEAD opponents whose corpses are still taking up grid slots
         dead_snakes = [
             snake.body
             for snake_name, snake in field.snakes.items()
@@ -547,7 +570,7 @@ if __name__ == "__main__":
             my_body=my_snake.body,
             winning_snake_head=winning_snake_head,
             attack_mode=attack_mode,
-            dead_snakes=dead_snakes,  # Integrated fix parameter
+            dead_snakes=dead_snakes,
         )
         
         if not api.set_direction(currentDirection):
