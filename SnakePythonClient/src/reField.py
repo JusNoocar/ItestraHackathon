@@ -43,6 +43,9 @@ class Field:
     snakes: Dict[TeamName, SnakeInfo]
     apples: List[Coord] = field(default_factory=list)
     bad_apples: List[Coord] = field(default_factory=list)
+    star_every_ticks: Optional[int] = None
+    instructions: List = field(default_factory=list)
+    star_spawn_points: List[Coord] = field(default_factory=list)
 
     @staticmethod
     def from_dict(raw: dict) -> "Field":
@@ -89,4 +92,24 @@ class Field:
                         else:
                             apples.append(coord)
 
-        return Field(size=size, snakes=snakes, apples=apples, bad_apples=bad_apples)
+        # capture star spawn timing if present
+        star_every_ticks = None
+        if isinstance(raw.get("star_every_ticks"), int):
+            star_every_ticks = raw.get("star_every_ticks")
+        elif isinstance(raw.get("starEveryTicks"), int):
+            star_every_ticks = raw.get("starEveryTicks")
+
+        instructions = raw.get("instructions") if isinstance(raw.get("instructions"), list) else []
+        star_spawn_points: List[Coord] = []
+        for inst in instructions:
+            try:
+                if isinstance(inst, dict) and "Spawn" in inst:
+                    spawn = inst["Spawn"]
+                    if isinstance(spawn, list) and len(spawn) == 2 and (spawn[0] == "Star" or spawn[0] == "star"):
+                        pos = spawn[1]
+                        if isinstance(pos, (list, tuple)) and len(pos) == 2:
+                            star_spawn_points.append(tuple(pos))
+            except Exception:
+                continue
+
+        return Field(size=size, snakes=snakes, apples=apples, bad_apples=bad_apples, star_every_ticks=star_every_ticks, instructions=instructions, star_spawn_points=star_spawn_points)

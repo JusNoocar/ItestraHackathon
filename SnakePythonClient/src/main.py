@@ -585,6 +585,14 @@ from data_structures import Direction
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Tunable defaults for star anticipation and aggression handling
+DEFAULT_STAR_ANTICIPATION_WINDOW = 3
+DEFAULT_STAR_PREPOSITION_WEIGHT = 25000
+DEFAULT_STAR_SPAWN_WEIGHT = 30000
+DEFAULT_AGGRESSIVE_ZONE_PENALTY = 30000
+DEFAULT_OPPORTUNISTIC_KILL_BONUS = 80000
+DEFAULT_DEAD_SNAKE_BUFFER = 1
+
 Coord = Tuple[int, int]
 
 # --- DYNAMIC ENUM DETECTION ---
@@ -757,8 +765,15 @@ def compute_direction_master(
     attack_mode: bool = False,
     dead_snakes: List[List[Coord]] = None,
     ticks_until_star: Optional[int] = None,
+    star_spawn_points: Optional[List[Coord]] = None,
+    anticipation_window: int = DEFAULT_STAR_ANTICIPATION_WINDOW,
+    preposition_weight: int = DEFAULT_STAR_PREPOSITION_WEIGHT,
+    spawn_weight: int = DEFAULT_STAR_SPAWN_WEIGHT,
+    aggressive_zone_penalty: int = DEFAULT_AGGRESSIVE_ZONE_PENALTY,
+    opportunistic_kill_bonus: int = DEFAULT_OPPORTUNISTIC_KILL_BONUS,
+    my_star_ticks_remaining: int = 0,
+    dead_snake_buffer: int = DEFAULT_DEAD_SNAKE_BUFFER,
 ) -> str:
-    
     width, height = field_size
     other_snakes = other_snakes or []
     other_snake_infos = other_snake_infos or []
@@ -770,7 +785,7 @@ def compute_direction_master(
     # interpret tick timing: if a star is due within a short window, bias movement
     anticipate_star = False
     if isinstance(ticks_until_star, int):
-        anticipate_star = ticks_until_star <= 3
+        anticipate_star = ticks_until_star <= max(1, anticipation_window)
 
     current_direction = to_internal_str(current_direction_raw)
     current_direction = _infer_current_direction(head, my_body, width, height, current_direction)
@@ -779,6 +794,19 @@ def compute_direction_master(
     for snake_body in dead_snakes:
         for segment in snake_body:
             dead_cells.add(segment)
+
+    # Build dead-snake hazard zone: include neighbors within buffer radius
+    dead_hazard = set(dead_cells)
+    try:
+        buf = max(0, int(dead_snake_buffer))
+    except Exception:
+        buf = DEFAULT_DEAD_SNAKE_BUFFER
+    if buf > 0:
+        for cell in list(dead_cells):
+            for dx in range(-buf, buf + 1):
+                for dy in range(-buf, buf + 1):
+                    if abs(dx) + abs(dy) <= buf:
+                        dead_hazard.add(((cell[0] + dx) % width, (cell[1] + dy) % height))
 
     if not other_snake_infos:
         for snake_body in other_snakes:
@@ -904,13 +932,19 @@ def compute_direction_master(
 
         next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
 
-        if next_pos in dead_cells or clear_time.get(next_pos, 0) > 1:
+        # Avoid stepping into dead-snake hazard cells
+        if next_pos in dead_hazard:
+            # treat as nearly fatal; continue to next direction
+            logger.debug("Skipping move into dead-snake hazard cell %s", next_pos)
+            continue
+        if clear_time.get(next_pos, 0) > 1:
             continue
 
         score = 0
 
         if 'aggressive_zones' in locals() and next_pos in aggressive_zones:
-            score -= 30000
+            score -= aggressive_zone_penalty
+            logger.debug("Applied aggressive zone penalty %s at %s", aggressive_zone_penalty, next_pos)
 
         dist_to_star = 999
         if stars:
@@ -929,19 +963,30 @@ def compute_direction_master(
                     score += 4800
 
         # If an opponent already has or is about to get the star, increase evasion weight
-        for opp_head in opponent_heads:
-            dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
-            opp_len = opp_head_to_len.get(opp_head, 0)
-            will_have_star = opp_will_have_star.get(opp_head, False)
-            has_star = opp_has_star.get(opp_head, False)
+        for info in other_snake_infos:
+            try:
+                opp_head = info.get("head")
+                if opp_head is None:
+                    continue
+                dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
+                opp_len = info.get("len", 0)
+                has_star = info.get("has_star", False)
+                will_have_star = info.get("will_have_star", False)
+                star_ticks = int(info.get("star_ticks_remaining", 0) or 0)
+                in_attack_window = bool(info.get("star_attack_window", False))
 
-            if has_star or will_have_star:
-                if dist_to_opp <= 3:
-                    score -= 20000 + (4 - dist_to_opp) * 12000
-                elif dist_to_opp <= 5:
-                    score -= (6 - dist_to_opp) * 5000
-                else:
-                    score += dist_to_opp * 50
+                # If opponent is in star attack window, strongly avoid nearby tiles
+                if in_attack_window or has_star or will_have_star:
+                    if dist_to_opp <= 1:
+                        score -= aggressive_zone_penalty * 8
+                    elif dist_to_opp == 2:
+                        score -= aggressive_zone_penalty * 4
+                    elif dist_to_opp <= 4:
+                        score -= aggressive_zone_penalty * 2
+                    else:
+                        score += dist_to_opp * 50
+            except Exception:
+                continue
             
         # If my snake is near a star and can safely take it, reward strong pursuit
         if stars:
@@ -956,16 +1001,27 @@ def compute_direction_master(
                 score -= 2000 * consecutive_same_streak
 
         max_safety_check = max(my_length + 5, 15)
-        pocket_volume = _calculate_dynamic_pocket(next_pos, clear_time, dead_cells, bad_apple_set, width, height, max_safety_check)
+        # Use dead_hazard as blocked cells for pocket calculation to avoid pockets blocked by dead bodies
+        pocket_volume = _calculate_dynamic_pocket(next_pos, clear_time, dead_hazard, bad_apple_set, width, height, max_safety_check)
 
         # If a star is about to spawn soon and there are currently no stars, prefer open pockets
         if anticipate_star and not stars:
-            # Strongly reward positions with large pocket volume (pre-positioning)
-            score += pocket_volume * 25000
-            # Prefer closer to center (generally safer and more reachable)
-            center = (width // 2, height // 2)
-            center_dist = _manhattan_distance(next_pos, center, field_size)
-            score += max(0, 8000 - center_dist * 400)
+            # prefer known spawn points if available
+            if star_spawn_points:
+                # reward being close to the nearest spawn point
+                dists = [_manhattan_distance(next_pos, sp, field_size) for sp in star_spawn_points]
+                nearest = min(dists) if dists else 999
+                reward = max(0, spawn_weight - nearest * 6000)
+                score += reward
+                score += pocket_volume * (preposition_weight // 2)
+                logger.debug("Prepositioning: next_pos=%s nearest_spawn_dist=%s spawn_reward=%s pocket_bonus=%s", next_pos, nearest, reward, pocket_volume * (preposition_weight // 2))
+            else:
+                # Strongly reward positions with large pocket volume (pre-positioning)
+                score += pocket_volume * preposition_weight
+                # Prefer closer to center (generally safer and more reachable)
+                center = (width // 2, height // 2)
+                center_dist = _manhattan_distance(next_pos, center, field_size)
+                score += max(0, 8000 - center_dist * 400)
 
         if one_vs_one and other_snake_infos:
             opp_info = other_snake_infos[0]
@@ -1034,12 +1090,29 @@ def compute_direction_master(
             try:
                 if not info:
                     continue
-                if info.get("has_star") or info.get("just_got_star"):
-                    opp_head = info.get("head")
-                    opp_len = info.get("len", 0)
-                    if opp_head and my_length > opp_len + 2 and pocket_volume >= my_length + 1:
-                        if _manhattan_distance(next_pos, opp_head, field_size) == 1:
-                            score += 80000
+                opp_head = info.get("head")
+                opp_len = info.get("len", 0)
+                star_ticks = int(info.get("star_ticks_remaining", 0) or 0)
+                in_attack_window = bool(info.get("star_attack_window", False))
+
+                # If we currently have star attack time, prioritize killing opponents
+                if my_star_ticks_remaining and my_star_ticks_remaining > 0:
+                    # moving onto an opponent head is an instant kill
+                    if opp_head and next_pos == opp_head:
+                        score += opportunistic_kill_bonus * 3
+                        logger.debug("Instant-kill move prioritized against %s", opp_head)
+                    # moving adjacent to an opponent head sets up immediate kill
+                    elif opp_head and _manhattan_distance(next_pos, opp_head, field_size) == 1:
+                        score += opportunistic_kill_bonus * 1.5
+                    # moving onto opponent body (penetration) shortens them
+                    elif opp_head and next_pos in info.get("body", [])[1:]:
+                        score += opportunistic_kill_bonus
+
+                # If opponent is in their star-attack window, avoid them strongly
+                if in_attack_window:
+                    if opp_head and _manhattan_distance(next_pos, opp_head, field_size) <= 2:
+                        score -= aggressive_zone_penalty * 10
+                        logger.debug("Avoiding opponent in attack window at %s", opp_head)
             except Exception:
                 continue
         
@@ -1113,13 +1186,27 @@ if __name__ == "__main__":
     parser.add_argument("game_name")
     parser.add_argument("--password", default="test")
     parser.add_argument("--base_url", default="http://localhost:3030")
+    parser.add_argument("--star-anticipation-window", type=int, default=DEFAULT_STAR_ANTICIPATION_WINDOW, help="ticks before spawn to start pre-positioning")
+    parser.add_argument("--star-preposition-weight", type=int, default=DEFAULT_STAR_PREPOSITION_WEIGHT, help="weight multiplier for pocket volume when anticipating star")
+    parser.add_argument("--star-spawn-weight", type=int, default=DEFAULT_STAR_SPAWN_WEIGHT, help="base reward for being near spawn point when star imminent")
+    parser.add_argument("--aggressive-penalty", type=int, default=DEFAULT_AGGRESSIVE_ZONE_PENALTY, help="penalty for entering predicted aggressive zones")
+    parser.add_argument("--opportunistic-kill-bonus", type=int, default=DEFAULT_OPPORTUNISTIC_KILL_BONUS, help="bonus score for safe kill opportunities on star carriers")
+    parser.add_argument("--log-level", default="INFO", help="logging level (DEBUG/INFO/WARNING)")
+    parser.add_argument("--dead-snake-buffer", type=int, default=DEFAULT_DEAD_SNAKE_BUFFER, help="cells radius around dead snake bodies treated as hazardous")
     args = parser.parse_args()
+
+    # apply log level
+    try:
+        logger.setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
+    except Exception:
+        logger.setLevel(logging.INFO)
 
     api = SnakeFieldAPI(args.base_url, args.team_name, args.game_name, args.password)
     alive = True
     currentDirectionStr = "NORTH"
     same_direction_count = 0
     tick_counter = 0  # local tick/frame counter to predict periodic star spawns
+    prev_star_count = 0
 
     api.set_direction(to_api_direction(currentDirectionStr))
 
@@ -1130,8 +1217,16 @@ if __name__ == "__main__":
             if field is None: 
                 continue
             tick_counter += 1
-            # predict ticks until next star spawn (stars spawn every 15 ticks)
-            ticks_until_next_star = (15 - (tick_counter % 15)) % 15
+            # determine star spawn interval from field metadata (default 15)
+            star_interval = getattr(field, "star_every_ticks", None) or getattr(field, "starEveryTicks", None) or 15
+            try:
+                star_interval = int(star_interval)
+                if star_interval <= 0:
+                    star_interval = 15
+            except Exception:
+                star_interval = 15
+            # predict ticks until next star spawn
+            ticks_until_next_star = (star_interval - (tick_counter % star_interval)) % star_interval
 
             my_snake = field.snakes.get(args.team_name)
             if not my_snake or not my_snake.alive: 
@@ -1202,10 +1297,17 @@ if __name__ == "__main__":
                 if snake.alive:
                     opp_head = snake.body[0] if snake.body else None
                     has_star = any("STAR" in str(item).upper() for item in snake.inventory)
-                    has_star = has_star or any(
-                        "STAR" in effect.effect.upper() or "INVINC" in effect.effect.upper()
-                        for effect in snake.active_effects
-                    )
+                    # active star/invinc effects
+                    star_ticks_remaining = 0
+                    for eff in getattr(snake, "active_effects", []):
+                        try:
+                            ename = getattr(eff, "effect", str(eff)).upper()
+                            rem = int(getattr(eff, "remaining_ticks", 0))
+                            if "STAR" in ename or "INVINC" in ename:
+                                star_ticks_remaining = max(star_ticks_remaining, rem)
+                                has_star = True
+                        except Exception:
+                            continue
                     will_have_star = False
                     if opp_head is not None:
                         will_have_star = any(_manhattan_distance(opp_head, star, field.size) <= 2 for star in stars)
@@ -1216,22 +1318,14 @@ if __name__ == "__main__":
                             opp_dir = _infer_current_direction(opp_head, snake.body, field.size[0], field.size[1], "NORTH")
                     except Exception:
                         opp_dir = None
-                    # detect recent star activation from active effects
-                    just_got_star = False
-                    for eff in getattr(snake, "active_effects", []):
-                        try:
-                            ename = getattr(eff, "effect", str(eff)).upper()
-                            rem = getattr(eff, "remaining_ticks", 0)
-                            if ("STAR" in ename or "INVINC" in ename) and rem >= 3:
-                                just_got_star = True
-                                break
-                        except Exception:
-                            continue
+                    # compute near-star flags
                     other_snakes.append(snake.body)
                     body_near_star = _snake_body_near_star(snake.body, stars, field.size)
                     head_near_star = False
                     if opp_head is not None:
                         head_near_star = any(_manhattan_distance(opp_head, star, field.size) <= 3 for star in stars)
+                    # attack window: first 5 ticks after getting star
+                    star_attack_window = 1 <= star_ticks_remaining <= 5
                     other_snake_infos.append({
                         "body": snake.body,
                         "head": opp_head,
@@ -1240,7 +1334,8 @@ if __name__ == "__main__":
                         "will_have_star": will_have_star,
                         "body_near_star": body_near_star,
                         "head_near_star": head_near_star,
-                        "just_got_star": just_got_star,
+                        "star_ticks_remaining": star_ticks_remaining,
+                        "star_attack_window": star_attack_window,
                         "direction": opp_dir,
                     })
                 else:
@@ -1254,6 +1349,16 @@ if __name__ == "__main__":
                     winning_snake_head = snake.body[0]
 
             attack_mode = max_opp_len > (len(my_snake.body) + 3) or max_opp_len > 20
+            # detect my star ticks
+            my_star_ticks_remaining = 0
+            for eff in getattr(my_snake, "active_effects", []):
+                try:
+                    ename = getattr(eff, "effect", str(eff)).upper()
+                    rem = int(getattr(eff, "remaining_ticks", 0))
+                    if "STAR" in ename or "INVINC" in ename:
+                        my_star_ticks_remaining = max(my_star_ticks_remaining, rem)
+                except Exception:
+                    continue
 
             next_direction = compute_direction_master(
                 head=head,
@@ -1270,9 +1375,21 @@ if __name__ == "__main__":
                 attack_mode=attack_mode,
                 dead_snakes=dead_snakes,
                 ticks_until_star=ticks_until_next_star,
+                star_spawn_points=getattr(field, "star_spawn_points", []),
+                my_star_ticks_remaining=my_star_ticks_remaining,
+                anticipation_window=args.star_anticipation_window,
+                preposition_weight=args.star_preposition_weight,
+                spawn_weight=args.star_spawn_weight,
+                aggressive_zone_penalty=args.aggressive_penalty,
+                opportunistic_kill_bonus=args.opportunistic_kill_bonus,
+                dead_snake_buffer=args.dead_snake_buffer,
             )
             same_direction_count = same_direction_count + 1 if next_direction == currentDirectionStr else 0
             currentDirectionStr = next_direction
+            # synchronize local tick counter with observed star spawns
+            if len(stars) > 0 and prev_star_count == 0:
+                tick_counter = 0
+            prev_star_count = len(stars)
             
             api_ready_dir = to_api_direction(currentDirectionStr)
             if not api.set_direction(api_ready_dir):
