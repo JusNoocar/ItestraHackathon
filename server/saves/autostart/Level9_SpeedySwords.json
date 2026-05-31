@@ -43,5 +43,7 @@
     }
   ],
   "sword_every_ticks": 2,
-  "speed_boost_every_ticks": 2
+  "speed_boost_every_ticks": 2,
+  "apple_every_ticks": 0
+
 }
