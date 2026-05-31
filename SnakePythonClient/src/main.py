@@ -1,1400 +1,462 @@
-# # import argparse
-# # import logging
-# # import time
-# # from typing import List, Optional, Tuple
+from __future__ import annotations
 
-# # from api import SnakeFieldAPI
-# # from data_structures import Direction
-
-# # logging.basicConfig(level=logging.INFO)
-# # logger = logging.getLogger(__name__)
-
-# # Coord = Tuple[int, int]
-
-# # _REVERSE_DIRECTIONS = {
-# #     "NORTH": "SOUTH",
-# #     "SOUTH": "NORTH",
-# #     "EAST": "WEST",
-# #     "WEST": "EAST",
-# # }
-
-# # _DIRECTION_VECTORS = {
-# #     "NORTH": (0, -1),
-# #     "SOUTH": (0, 1),
-# #     "EAST": (1, 0),
-# #     "WEST": (-1, 0),
-# # }
-
-
-# # def is_reverse_direction(direction: Direction, current_direction: Direction) -> bool:
-# #     """Return True if `direction` would reverse `current_direction`."""
-# #     return _REVERSE_DIRECTIONS.get(direction) == current_direction
-
-
-# # def _manhattan_distance(a: Coord, b: Coord, size: Optional[Tuple[int, int]] = None) -> int:
-# #     """Calculates Manhattan distance, handling wrap-around screen boundaries if size is provided."""
-# #     dx = abs(a[0] - b[0])
-# #     dy = abs(a[1] - b[1])
-# #     if size:
-# #         dx = min(dx, size[0] - dx)
-# #         dy = min(dy, size[1] - dy)
-# #     return dx + dy
-
-
-# # def _normalize_coord(value) -> Optional[Coord]:
-# #     if isinstance(value, (list, tuple)) and len(value) == 2:
-# #         x, y = value
-# #         if isinstance(x, int) and isinstance(y, int):
-# #             return (x, y)
-# #     if isinstance(value, dict):
-# #         x = value.get("x") if "x" in value else value.get("col")
-# #         y = value.get("y") if "y" in value else value.get("row")
-# #         if isinstance(x, int) and isinstance(y, int):
-# #             return (x, y)
-# #     return None
-
-
-# # def compute_direction_toward_nearest_apple(
-# #     head: Coord,
-# #     apples: List[Coord],
-# #     current_direction: Direction,
-# #     other_snakes: List[List[Coord]] = None,
-# #     field_size: Tuple[int, int] = (20, 20),
-# #     my_body: List[Coord] = None,
-# #     winning_snake_head: Optional[Coord] = None,
-# #     attack_mode: bool = False,
-# # ) -> Direction:
-# #     """Calculates the best next move based on survival, apple collection,
-# #     defensive apple circling, and targeted kamikaze strikes on a toroidal wrapping grid.
-# #     """
-# #     width, height = field_size
-# #     other_snakes = other_snakes or []
-# #     my_body = my_body or [head]
-# #     my_length = len(my_body)
-
-# #     # Gather all lethal obstacle zones (snake bodies)
-# #     obstacle_cells = set(my_body)
-# #     opponent_heads = set()
-# #     for snake_body in other_snakes:
-# #         obstacle_cells.update(snake_body)
-# #         if snake_body:
-# #             opponent_heads.add(snake_body[0])
-
-# #     best_direction = current_direction
-# #     best_score = -float("inf")
-
-# #     normalized_apples = [apple for apple in (_normalize_coord(item) for item in apples) if apple]
-
-# #     # Find the dense center of apple clusters using toroidal math
-# #     cluster_center = None
-# #     if normalized_apples:
-# #         best_cluster_count = -1
-# #         for app in normalized_apples:
-# #             count = sum(1 for other in normalized_apples if _manhattan_distance(app, other, field_size) <= 3)
-# #             if count > best_cluster_count:
-# #                 best_cluster_count = count
-# #                 cluster_center = app
-
-# #     # Evaluate all 4 physical directions
-# #     for direction, vector in _DIRECTION_VECTORS.items():
-# #         if is_reverse_direction(direction, current_direction):
-# #             continue
-
-# #         # SCREEN WRAPPING: Apply modulo boundary logic to determine the true next position
-# #         next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-
-# #         # 1. Collision Check (Allow head-on crash ONLY if deliberately executing a winner kill)
-# #         if next_pos in obstacle_cells:
-# #             if attack_mode and next_pos == winning_snake_head:
-# #                 pass 
-# #             else:
-# #                 continue
-
-# #         # Base scoring calculation
-# #         score = 0
-
-# #         # Account for head-collision vulnerabilities on the next turn via wrap-around distance
-# #         for opp_head in opponent_heads:
-# #             if _manhattan_distance(next_pos, opp_head, field_size) == 1:
-# #                 if attack_mode and opp_head == winning_snake_head:
-# #                     score += 2000  # Massive encouragement to lock onto target head
-# #                 else:
-# #                     score -= 150   # Avoid head-ons with random smaller snakes
-
-# #         # PHASE 3: Kamikaze Intercept Subroutine
-# #         if attack_mode and winning_snake_head:
-# #             dist_to_winner = _manhattan_distance(next_pos, winning_snake_head, field_size)
-# #             score += (100 - dist_to_winner) * 50
-# #             if next_pos == winning_snake_head:
-# #                 score += 100000  # Absolute priority target hit
-# #         else:
-# #             # PHASE 1 & 2: Food Acquisition & Circling
-# #             if normalized_apples:
-# #                 closest_apple = min(normalized_apples, key=lambda a: _manhattan_distance(next_pos, a, field_size))
-# #                 dist_to_apple = _manhattan_distance(next_pos, closest_apple, field_size)
-# #                 score += (100 - dist_to_apple) * 10
-
-# #                 # Check if competitors are crowding our food
-# #                 min_opp_dist = min(
-# #                     [_manhattan_distance(closest_apple, cell, field_size) for snake in other_snakes for cell in snake]
-# #                     + [999]
-# #                 )
-# #                 if min_opp_dist < 5:
-# #                     score -= (5 - min_opp_dist) * 20
-
-# #                 # PHASE 2: Lock-and-Circle Area Protection
-# #                 if my_length >= 10 and cluster_center:
-# #                     dist_to_cluster = _manhattan_distance(next_pos, cluster_center, field_size)
-# #                     score += (50 - dist_to_cluster) * 15
-                    
-# #                     # Coil matching: Hug your own body segments tightly across boundaries to protect food perimeter
-# #                     adjacent_to_self = sum(1 for cell in my_body[3:] if _manhattan_distance(next_pos, cell, field_size) == 1)
-# #                     score += adjacent_to_self * 35
-
-# #         # Lookahead verification to ensure we maintain open escape channels around wrapped spaces
-# #         free_neighbors = 0
-# #         for v in _DIRECTION_VECTORS.values():
-# #             nx, ny = (next_pos[0] + v[0]) % width, (next_pos[1] + v[1]) % height
-# #             if (nx, ny) not in obstacle_cells:
-# #                 free_neighbors += 1
-# #         score += free_neighbors * 40
-
-# #         if score > best_score:
-# #             best_score = score
-# #             best_direction = direction
-
-# #     # Emergency Fallback: If trapped completely, look to drag an opponent head down with us across edges
-# #     if best_score == -float("inf"):
-# #         for direction, vector in _DIRECTION_VECTORS.items():
-# #             if is_reverse_direction(direction, current_direction):
-# #                 continue
-# #             next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-# #             for snake_body in other_snakes:
-# #                 if snake_body and next_pos == snake_body[0]:
-# #                     return direction
-# #         return current_direction
-
-# #     return best_direction
-
-
-# # if __name__ == "__main__":
-# #     parser = argparse.ArgumentParser(description="Snake game bot client")
-# #     parser.add_argument("team_name", help="Name of the team/snake")
-# #     parser.add_argument("game_name", help="Name of the game to join")
-# #     parser.add_argument("--password", default="test", help="Password for server")
-# #     parser.add_argument("--base_url", default="http://localhost:3030",
-# #                         help="Base URL of the game server (default: http://localhost:3030)")
-# #     args = parser.parse_args()
-
-# #     team_name = args.team_name
-# #     base_url = args.base_url
-# #     game_name = args.game_name
-# #     password = args.password
-
-# #     alive = True
-# #     currentDirection: Direction = "NORTH"
-
-# #     api = SnakeFieldAPI(base_url, team_name, game_name, password)
-
-# #     if not api.set_direction(currentDirection):
-# #         logger.warning("Initial direction registration failed, continuing anyway")
-
-# #     while alive:
-# #         time.sleep(0.5)  # Avoid rate limiting error
-# #         field = api.get_field()
-# #         if field is None:
-# #             continue
-
-# #         my_snake = field.snakes.get(team_name)
-# #         if not my_snake or not my_snake.alive:
-# #             alive = False
-# #             break
-
-# #         head = my_snake.body[0]
-# #         apples = getattr(field, "apples", [])
-        
-# #         other_snakes = [
-# #             snake.body
-# #             for snake_name, snake in field.snakes.items()
-# #             if snake_name != team_name and snake.alive
-# #         ]
-
-# #         # Strategic Evaluation: Locate the leading threat
-# #         winning_snake_head = None
-# #         max_opponent_len = 0
-# #         for snake_name, snake in field.snakes.items():
-# #             if snake_name != team_name and snake.alive:
-# #                 if len(snake.body) > max_opponent_len:
-# #                     max_opponent_len = len(snake.body)
-# #                     winning_snake_head = snake.body[0]
-
-# #         my_length = len(my_snake.body)
-        
-# #         # Attack trigger: If an opponent gets significantly larger than us, pivot strategy to elimination
-# #         attack_mode = max_opponent_len > (my_length + 4)
-
-# #         currentDirection = compute_direction_toward_nearest_apple(
-# #             head=head,
-# #             apples=apples,
-# #             current_direction=currentDirection,
-# #             other_snakes=other_snakes,
-# #             field_size=getattr(field, "size", (20, 20)),
-# #             my_body=my_snake.body,
-# #             winning_snake_head=winning_snake_head,
-# #             attack_mode=attack_mode,
-# #         )
-# #         time.sleep(0.25)  # Avoid rate limiting error
-# #         if not api.set_direction(currentDirection):
-# #             logger.warning("Failed to update direction to %s", currentDirection)
-
-
-
-
-
-# import argparse
-# import logging
-# import time
-# from typing import List, Optional, Tuple, Set
-
-# from api import SnakeFieldAPI
-# from data_structures import Direction
-
-# logging.basicConfig(level=logging.INFO)
-# logger = logging.getLogger(__name__)
-
-# Coord = Tuple[int, int]
-
-# _REVERSE_DIRECTIONS = {
-#     "NORTH": "SOUTH",
-#     "SOUTH": "NORTH",
-#     "EAST": "WEST",
-#     "WEST": "EAST",
-# }
-
-# _DIRECTION_VECTORS = {
-#     "NORTH": (0, -1),
-#     "SOUTH": (0, 1),
-#     "EAST": (1, 0),
-#     "WEST": (-1, 0),
-# }
-
-
-# def is_reverse_direction(direction: Direction, current_direction: Direction) -> bool:
-#     return _REVERSE_DIRECTIONS.get(direction) == current_direction
-
-
-# def _manhattan_distance(a: Coord, b: Coord, size: Optional[Tuple[int, int]] = None) -> int:
-#     dx = abs(a[0] - b[0])
-#     dy = abs(a[1] - b[1])
-#     if size:
-#         dx = min(dx, size[0] - dx)
-#         dy = min(dy, size[1] - dy)
-#     return dx + dy
-
-
-# def _normalize_coord(value) -> Optional[Coord]:
-#     if isinstance(value, (list, tuple)) and len(value) == 2:
-#         x, y = value
-#         if isinstance(x, int) and isinstance(y, int):
-#             return (x, y)
-#     if isinstance(value, dict):
-#         x = value.get("x") if "x" in value else value.get("col")
-#         y = value.get("y") if "y" in value else value.get("row")
-#         if isinstance(x, int) and isinstance(y, int):
-#             return (x, y)
-#     return None
-
-
-# def _calculate_pocket_volume(start_pos: Coord, obstacle_cells: Set[Coord], width: int, height: int, max_cells_needed: int) -> int:
-#     if start_pos in obstacle_cells:
-#         return 0
-#     visited = {start_pos}
-#     queue = [start_pos]
-#     head_idx = 0
-#     while head_idx < len(queue):
-#         curr = queue[head_idx]
-#         head_idx += 1
-#         if len(visited) >= max_cells_needed:
-#             return len(visited)
-#         for v in _DIRECTION_VECTORS.values():
-#             nxt = ((curr[0] + v[0]) % width, (curr[1] + v[1]) % height)
-#             if nxt not in obstacle_cells and nxt not in visited:
-#                 visited.add(nxt)
-#                 queue.append(nxt)
-#     return len(visited)
-
-
-# def _bfs_distance_to_nearest_apple(start_pos: Coord, target_apples: List[Coord], obstacle_cells: Set[Coord], width: int, height: int) -> int:
-#     """Finds the true, maze-navigated distance to the nearest apple. Returns 999 if completely walled off."""
-#     if not target_apples:
-#         return 999
-#     if start_pos in target_apples:
-#         return 0
-
-#     visited = {start_pos}
-#     queue = [(start_pos, 0)]
-#     target_set = set(target_apples)
-#     head_idx = 0
-
-#     while head_idx < len(queue):
-#         curr, dist = queue[head_idx]
-#         head_idx += 1
-
-#         if curr in target_set:
-#             return dist
-
-#         for v in _DIRECTION_VECTORS.values():
-#             nxt = ((curr[0] + v[0]) % width, (curr[1] + v[1]) % height)
-#             if nxt not in obstacle_cells and nxt not in visited:
-#                 visited.add(nxt)
-#                 queue.append((nxt, dist + 1))
-
-#     return 999  # No valid path exists to any apple in the list
-
-
-# def compute_direction_toward_nearest_apple(
-#     head: Coord,
-#     apples: List[Coord],
-#     current_direction: Direction,
-#     other_snakes: List[List[Coord]] = None,
-#     field_size: Tuple[int, int] = (20, 20),
-#     my_body: List[Coord] = None,
-#     winning_snake_head: Optional[Coord] = None,
-#     attack_mode: bool = False,
-#     dead_snakes: List[List[Coord]] = None,
-# ) -> Direction:
-    
-#     width, height = field_size
-#     other_snakes = other_snakes or []
-#     dead_snakes = dead_snakes or []
-#     my_body = my_body or [head]
-#     my_length = len(my_body)
-
-#     # 1. Map all hard obstacles
-#     obstacle_cells = set()
-#     for segment in my_body[:-1]:
-#         obstacle_cells.add(segment)
-        
-#     opponent_heads = set()
-#     for snake_body in other_snakes:
-#         if not snake_body:
-#             continue
-#         opponent_heads.add(snake_body[0])
-#         for segment in snake_body[:-1]:
-#             obstacle_cells.add(segment)
-
-#     for snake_body in dead_snakes:
-#         if not snake_body:
-#             continue
-#         for segment in snake_body:
-#             obstacle_cells.add(segment)
-
-#     # Calculate Phase Mode based on population
-#     alive_opponents_count = len(opponent_heads)
-#     is_crowded_phase = alive_opponents_count >= 2
-
-#     # Optimistic pocket obstacles (Tail sliding away)
-#     pocket_obstacles = set(obstacle_cells)
-#     clearance_count = max(1, int(my_length * 0.35))
-#     if my_length > 4:
-#         for segment in my_body[-clearance_count:]:
-#             if segment in pocket_obstacles:
-#                 pocket_obstacles.remove(segment)
-
-#     best_direction = current_direction
-#     best_score = -float("inf")
-
-#     normalized_apples = [apple for apple in (_normalize_coord(item) for item in apples) if apple]
-
-#     for direction, vector in _DIRECTION_VECTORS.items():
-#         if is_reverse_direction(direction, current_direction):
-#             continue
-
-#         next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-
-#         if next_pos in obstacle_cells:
-#             continue
-
-#         score = 0
-
-#         # 1. Pocket Safety (Can we fit?)
-#         required_escape_volume = min(8, my_length + 1)
-#         pocket_volume = _calculate_pocket_volume(next_pos, pocket_obstacles, width, height, required_escape_volume)
-        
-#         if pocket_volume < required_escape_volume:
-#             score -= 3000 
-#         else:
-#             score += pocket_volume * 10
-
-#         # 2. Collision / Crowded Phase Avoidance
-#         for opp_head in opponent_heads:
-#             dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
-#             if dist_to_opp == 1:
-#                 if attack_mode and opp_head == winning_snake_head:
-#                     score += 5000  
-#                 else:
-#                     score -= 4000  
-            
-#             if is_crowded_phase and dist_to_opp <= 3:
-#                 score -= 200  
-
-#         # 3. TRUE PATHFINDING (The Apple Fix)
-#         if attack_mode and winning_snake_head:
-#             dist_to_winner = _manhattan_distance(next_pos, winning_snake_head, field_size)
-#             score += (100 - dist_to_winner) * 100
-#             if next_pos == winning_snake_head:
-#                 score += 500000
-#         else:
-#             viable_apples = []
-#             for app in normalized_apples:
-#                 our_dist = _manhattan_distance(head, app, field_size)
-#                 is_contested = False
-#                 for opp_head in opponent_heads:
-#                     if _manhattan_distance(opp_head, app, field_size) <= our_dist:
-#                         is_contested = True
-#                         break
-#                 if not is_contested:
-#                     viable_apples.append(app)
-
-#             target_apples = viable_apples if viable_apples else normalized_apples
-            
-#             # --- THE BFS UPGRADE ---
-#             # Instead of guessing distance, we map the exact maze route.
-#             true_distance_to_apple = _bfs_distance_to_nearest_apple(next_pos, target_apples, pocket_obstacles, width, height)
-            
-#             if true_distance_to_apple != 999:
-#                 # We have a mathematically verified, clear path to an apple.
-#                 apple_weight = 60 if is_crowded_phase else 150
-#                 score += (100 - true_distance_to_apple) * apple_weight  
-
-#                 if not is_crowded_phase:
-#                     for opp_head in opponent_heads:
-#                         if _manhattan_distance(next_pos, opp_head, field_size) == 2:  
-#                             score += 80  
-#             else:
-#                 # If ALL apples are walled off, maximize open space to survive until they open up
-#                 score += pocket_volume * 50
-
-#         if score > best_score:
-#             best_score = score
-#             best_direction = direction
-
-#     # Emergency Fallback
-#     if best_score == -float("inf"):
-#         for direction, vector in _DIRECTION_VECTORS.items():
-#             if is_reverse_direction(direction, current_direction):
-#                 continue
-#             next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-#             for snake_body in other_snakes:
-#                 if snake_body and next_pos == snake_body[0]:
-#                     return direction
-#         return current_direction
-
-#     return best_direction
-
-# if __name__ == "__main__":
-#     parser = argparse.ArgumentParser(description="Snake game bot client")
-#     parser.add_argument("team_name", help="Name of the team/snake")
-#     parser.add_argument("game_name", help="Name of the game to join")
-#     parser.add_argument("--password", default="test", help="Password for server")
-#     parser.add_argument("--base_url", default="http://localhost:3030",
-#                         help="Base URL of the game server (default: http://localhost:3030)")
-#     args = parser.parse_args()
-
-#     team_name = args.team_name
-#     base_url = args.base_url
-#     game_name = args.game_name
-#     password = args.password
-
-#     alive = True
-#     currentDirection: Direction = "NORTH"
-
-#     api = SnakeFieldAPI(base_url, team_name, game_name, password)
-
-#     if not api.set_direction(currentDirection):
-#         logger.warning("Initial direction registration failed, continuing anyway")
-
-#     while alive:
-#         time.sleep(0.4)  
-#         field = api.get_field()
-#         if field is None:
-#             continue
-
-#         my_snake = field.snakes.get(team_name)
-#         if not my_snake or not my_snake.alive:
-#             alive = False
-#             break
-
-#         head = my_snake.body[0]
-#         apples = getattr(field, "apples", [])
-        
-#         other_snakes = [
-#             snake.body
-#             for snake_name, snake in field.snakes.items()
-#             if snake_name != team_name and snake.alive
-#         ]
-
-#         dead_snakes = [
-#             snake.body
-#             for snake_name, snake in field.snakes.items()
-#             if snake_name != team_name and not snake.alive
-#         ]
-
-#         winning_snake_head = None
-#         max_opponent_len = 0
-#         for snake_name, snake in field.snakes.items():
-#             if snake_name != team_name and snake.alive:
-#                 if len(snake.body) > max_opponent_len:
-#                     max_opponent_len = len(snake.body)
-#                     winning_snake_head = snake.body[0]
-
-#         my_length = len(my_snake.body)
-#         attack_mode = max_opponent_len > (my_length + 5) and max_opponent_len > 15
-
-#         currentDirection = compute_direction_toward_nearest_apple(
-#             head=head,
-#             apples=apples,
-#             current_direction=currentDirection,
-#             other_snakes=other_snakes,
-#             field_size=getattr(field, "size", (20, 20)),
-#             my_body=my_snake.body,
-#             winning_snake_head=winning_snake_head,
-#             attack_mode=attack_mode,
-#             dead_snakes=dead_snakes,
-#         )
-        
-#         if not api.set_direction(currentDirection):
-#             logger.warning("Failed to update direction to %s", currentDirection)
-
-
-'''
-
-dhdzhbzgbgzdhtzdn
-
-'''
 import argparse
-import logging
+import math
 import random
 import time
-import heapq
-from typing import List, Optional, Tuple, Set
-from star_predictor import predict_star
-from planner import a_star
-from features import extract_features
-from policy import score_features, default_weights
+from collections import deque
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from api import SnakeFieldAPI
-from data_structures import Direction
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Tunable defaults for star anticipation and aggression handling
-DEFAULT_STAR_ANTICIPATION_WINDOW = 3
-DEFAULT_STAR_PREPOSITION_WEIGHT = 25000
-DEFAULT_STAR_SPAWN_WEIGHT = 30000
-DEFAULT_AGGRESSIVE_ZONE_PENALTY = 30000
-DEFAULT_OPPORTUNISTIC_KILL_BONUS = 80000
-DEFAULT_DEAD_SNAKE_BUFFER = 1
+import requests
 
 Coord = Tuple[int, int]
+Direction = str
 
-# --- DYNAMIC ENUM DETECTION ---
-IS_ENUM = hasattr(Direction, "__members__")
-
-def to_api_direction(dir_str: str) -> Direction:
-    if IS_ENUM:
-        return Direction[dir_str]
-    return dir_str
-
-def to_internal_str(dir_obj) -> str:
-    if IS_ENUM and hasattr(dir_obj, "name"):
-        return dir_obj.name
-    return str(dir_obj).upper()
-
-_REVERSE_DIRECTIONS = {
-    "NORTH": "SOUTH",
-    "SOUTH": "NORTH",
-    "EAST": "WEST",
-    "WEST": "EAST",
-}
-
-_DIRECTION_VECTORS = {
+DIRECTIONS: Dict[Direction, Coord] = {
     "NORTH": (0, -1),
     "SOUTH": (0, 1),
-    "EAST": (1, 0),
     "WEST": (-1, 0),
+    "EAST": (1, 0),
 }
 
-def is_reverse_direction(direction: str, current_direction: str) -> bool:
-    return _REVERSE_DIRECTIONS.get(direction) == current_direction
+OPPOSITE: Dict[Direction, Direction] = {
+    "NORTH": "SOUTH",
+    "SOUTH": "NORTH",
+    "WEST": "EAST",
+    "EAST": "WEST",
+}
 
-def _manhattan_distance(a: Coord, b: Coord, size: Optional[Tuple[int, int]] = None) -> int:
-    dx = abs(a[0] - b[0])
-    dy = abs(a[1] - b[1])
-    if size:
-        dx = min(dx, size[0] - dx)
-        dy = min(dy, size[1] - dy)
-    return dx + dy
+ITEM_VALUE: Dict[str, float] = {
+    "Star": 1200.0,
+    "Sword": 850.0,
+    "SpeedBoost": 780.0,
+    "InstantStack": 700.0,
+    "Apple": 250.0,
+    "BadApple": -900.0,
+}
 
-
-def _within_star_diamond(pos: Coord, star: Coord, size: Tuple[int, int], radius: int = 3) -> bool:
-    return _manhattan_distance(pos, star, size) <= radius
-
-
-def _snake_body_near_star(snake_body: List[Coord], stars: List[Coord], size: Tuple[int, int], radius: int = 3) -> bool:
-    if not stars or not snake_body:
-        return False
-    return any(
-        _manhattan_distance(part, star, size) <= radius
-        for part in snake_body
-        for star in stars
-    )
-
-def _infer_current_direction(head: Coord, my_body: List[Coord], width: int, height: int, fallback: str) -> str:
-    if len(my_body) < 2:
-        return fallback
-    neck = my_body[1]
-    dx = (head[0] - neck[0]) % width
-    if dx > width // 2:
-        dx -= width
-    dy = (head[1] - neck[1]) % height
-    if dy > height // 2:
-        dy -= height
-
-    if abs(dx) > abs(dy):
-        return "EAST" if dx > 0 else "WEST"
-    elif abs(dy) > abs(dx):
-        return "SOUTH" if dy > 0 else "NORTH"
-    return fallback
-
-def _calculate_dynamic_pocket(
-    start_pos: Coord, 
-    clear_time: dict, 
-    dead_cells: Set[Coord], 
-    bad_apple_set: Set[Coord],
-    width: int, 
-    height: int, 
-    max_cells: int
-) -> int:
-    if start_pos in dead_cells or clear_time.get(start_pos, 0) > 1 or start_pos in bad_apple_set:
-        return 0
-        
-    visited = {start_pos}
-    queue = [(start_pos, 1)] 
-    head_idx = 0
-    
-    while head_idx < len(queue):
-        curr, d = queue[head_idx]
-        head_idx += 1
-        
-        if len(visited) >= max_cells:
-            return len(visited)
-            
-        for v in _DIRECTION_VECTORS.values():
-            nxt = ((curr[0] + v[0]) % width, (curr[1] + v[1]) % height)
-            if nxt not in visited and nxt not in bad_apple_set:
-                if not (nxt in dead_cells or clear_time.get(nxt, 0) > d + 1):
-                    visited.add(nxt)
-                    queue.append((nxt, d + 1))
-    return len(visited)
-
-def _dijkstra_to_nearest_apple(
-    start_pos: Coord,
-    target_apples: List[Coord],
-    bad_apple_set: Set[Coord],
-    clear_time: dict,
-    dead_cells: Set[Coord],
-    width: int,
-    height: int
-) -> Tuple[int, int]:
-    if not target_apples:
-        return 999999, 999
-    if start_pos in dead_cells or clear_time.get(start_pos, 0) > 1:
-        return 999999, 999
-
-    start_cost = 50000 if start_pos in bad_apple_set else 1
-    pq = [(start_cost, 1, start_pos)]
-    best_costs = {start_pos: start_cost}
-    target_set = set(target_apples)
-    
-    while pq:
-        cost, steps, curr = heapq.heappop(pq)
-        
-        if cost > best_costs.get(curr, float('inf')):
-            continue
-            
-        if curr in target_set:
-            return cost, steps - 1
-            
-        for v in _DIRECTION_VECTORS.values():
-            nxt = ((curr[0] + v[0]) % width, (curr[1] + v[1]) % height)
-            arrival_turn = steps + 1
-            
-            if nxt in dead_cells or clear_time.get(nxt, 0) > arrival_turn:
-                continue
-                
-            next_cost = cost + (50000 if nxt in bad_apple_set else 1)
-            if next_cost < best_costs.get(nxt, float('inf')):
-                best_costs[nxt] = next_cost
-                heapq.heappush(pq, (next_cost, arrival_turn, nxt))
-                
-    return 999999, 999
-
-def _estimate_star_risk_for_opponent(
-    opp_head: Coord,
-    star_positions: List[Coord],
-    my_head: Coord,
-    field_size: Tuple[int, int],
-) -> bool:
-    if not star_positions:
-        return False
-    if _manhattan_distance(opp_head, my_head, field_size) <= 3:
-        return True
-    return any(_manhattan_distance(opp_head, star, field_size) <= 2 for star in star_positions)
+POWER_ITEMS = {"Star", "Sword", "SpeedBoost", "InstantStack"}
+GOOD_ITEMS = {"Star", "Sword", "SpeedBoost", "InstantStack", "Apple"}
 
 
-def compute_direction_master(
-    head: Coord,
-    apples: List[Coord],
-    bad_apples: List[Coord],
-    stars: List[Coord],
-    current_direction_raw,
-    consecutive_same_streak: int = 0,
-    other_snakes: List[List[Coord]] = None,
-    other_snake_infos: List[dict] = None,
-    field_size: Tuple[int, int] = (20, 20),
-    my_body: List[Coord] = None,
-    winning_snake_head: Optional[Coord] = None,
-    attack_mode: bool = False,
-    dead_snakes: List[List[Coord]] = None,
-    ticks_until_star: Optional[int] = None,
-    star_spawn_points: Optional[List[Coord]] = None,
-    anticipation_window: int = DEFAULT_STAR_ANTICIPATION_WINDOW,
-    preposition_weight: int = DEFAULT_STAR_PREPOSITION_WEIGHT,
-    spawn_weight: int = DEFAULT_STAR_SPAWN_WEIGHT,
-    aggressive_zone_penalty: int = DEFAULT_AGGRESSIVE_ZONE_PENALTY,
-    opportunistic_kill_bonus: int = DEFAULT_OPPORTUNISTIC_KILL_BONUS,
-    my_star_ticks_remaining: int = 0,
-    dead_snake_buffer: int = DEFAULT_DEAD_SNAKE_BUFFER,
-) -> str:
-    width, height = field_size
-    other_snakes = other_snakes or []
-    other_snake_infos = other_snake_infos or []
-    dead_snakes = dead_snakes or []
-    stars = stars or []
-    my_body = my_body or [head]
-    my_length = len(my_body)
+class SnakeAPI:
+    def __init__(self, base_url: str, team_name: str, game_name: str, password: str, timeout: float = 0.45) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.team_name = team_name
+        self.game_name = game_name
+        self.timeout = timeout
+        self.session = requests.Session()
+        self.session.auth = (team_name, password)
+        self.session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
 
-    # interpret tick timing: if a star is due within a short window, bias movement
-    anticipate_star = False
-    if isinstance(ticks_until_star, int):
-        anticipate_star = ticks_until_star <= max(1, anticipation_window)
+    def _url(self, suffix: str) -> str:
+        return f"{self.base_url}/games/{self.game_name}{suffix}"
 
-    current_direction = to_internal_str(current_direction_raw)
-    current_direction = _infer_current_direction(head, my_body, width, height, current_direction)
+    def state(self) -> Dict[str, Any]:
+        response = self.session.get(self._url("/state"), timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
 
-    dead_cells = set()
-    for snake_body in dead_snakes:
-        for segment in snake_body:
-            dead_cells.add(segment)
-
-    # Build dead-snake hazard zone: include neighbors within buffer radius
-    dead_hazard = set(dead_cells)
-    try:
-        buf = max(0, int(dead_snake_buffer))
-    except Exception:
-        buf = DEFAULT_DEAD_SNAKE_BUFFER
-    if buf > 0:
-        for cell in list(dead_cells):
-            for dx in range(-buf, buf + 1):
-                for dy in range(-buf, buf + 1):
-                    if abs(dx) + abs(dy) <= buf:
-                        dead_hazard.add(((cell[0] + dx) % width, (cell[1] + dy) % height))
-
-    if not other_snake_infos:
-        for snake_body in other_snakes:
-            if not snake_body:
-                continue
-            opp_head = snake_body[0]
-            other_snake_infos.append({
-                "body": snake_body,
-                "head": opp_head,
-                "len": len(snake_body),
-                "has_star": False,
-                "will_have_star": False,
-            })
-
-    volatile_opponents = set()
-    for snake_body in other_snakes:
-        if not snake_body:
-            continue
-        opp_head = snake_body[0]
-        
-        is_at_risk = False
-        for other_snake in other_snakes:
-            if other_snake and other_snake[0] != opp_head:
-                if _manhattan_distance(opp_head, other_snake[0], field_size) <= 2:
-                    is_at_risk = True
-                    break
-        if not is_at_risk and _manhattan_distance(opp_head, head, field_size) <= 2:
-            is_at_risk = True
-            
-        if not is_at_risk:
-            for v in _DIRECTION_VECTORS.values():
-                adj = ((opp_head[0] + v[0]) % width, (opp_head[1] + v[1]) % height)
-                if adj in dead_cells:
-                    is_at_risk = True
-                    break
-                    
-        if is_at_risk:
-            volatile_opponents.add(opp_head)
-
-    clear_time = {}
-    L_my = len(my_body)
-    for i, segment in enumerate(my_body):
-        t = L_my - i
-        if segment not in clear_time or t > clear_time[segment]:
-            clear_time[segment] = t
-            
-    opponent_heads = set()
-    opp_head_to_len = {}
-    opp_has_star = {}
-    opp_will_have_star = {}
-    for snake_body in other_snakes:
-        if not snake_body:
-            continue
-        opp_head = snake_body[0]
-        opponent_heads.add(opp_head)
-        opp_head_to_len[opp_head] = len(snake_body)
-        opp_info = next((info for info in other_snake_infos if info.get("head") == opp_head), None)
-        opp_has_star[opp_head] = bool(opp_info and opp_info.get("has_star", False))
-        opp_will_have_star[opp_head] = bool(opp_info and opp_info.get("will_have_star", False))
-        
-        L_opp = len(snake_body)
-        is_frozen = opp_head in volatile_opponents
-        
-        for j, segment in enumerate(snake_body):
-            if is_frozen:
-                dead_cells.add(segment)
-            else:
-                t = L_opp - j
-                if segment not in clear_time or t > clear_time[segment]:
-                    clear_time[segment] = t
-
-    # Build aggressive prediction zones for opponents who have recently acquired the star
-    aggressive_zones = set()
-    for info in other_snake_infos:
+    def set_direction(self, direction: Direction) -> None:
         try:
-            if not info:
-                continue
-            if info.get("has_star") or info.get("just_got_star") or info.get("will_have_star"):
-                opp_head = info.get("head")
-                opp_dir = info.get("direction")
-                if opp_head is None:
-                    continue
-                # If we know direction, project a short forward cone
-                if opp_dir and opp_dir in _DIRECTION_VECTORS:
-                    v = _DIRECTION_VECTORS[opp_dir]
-                    for step in range(1, 4):
-                        p = ((opp_head[0] + v[0] * step) % width, (opp_head[1] + v[1] * step) % height)
-                        aggressive_zones.add(p)
-                        # include neighboring cells of the projection
-                        for vv in _DIRECTION_VECTORS.values():
-                            aggressive_zones.add(((p[0] + vv[0]) % width, (p[1] + vv[1]) % height))
-                else:
-                    # Unknown heading: mark surrounding area as aggressive
-                    for dx in range(-3, 4):
-                        for dy in range(-3, 4):
-                            if abs(dx) + abs(dy) <= 3:
-                                aggressive_zones.add(((opp_head[0] + dx) % width, (opp_head[1] + dy) % height))
-        except Exception:
-            continue
-
-    bad_apple_set = set(bad_apples)
-    alive_opponents_count = len(opponent_heads)
-    is_crowded_phase = alive_opponents_count >= 2
-
-    one_vs_one = alive_opponents_count == 1
-    opponent_has_star = any(info.get("has_star", False) for info in other_snake_infos)
-    enemy_near_star = any(info.get("head_near_star", False) or info.get("body_near_star", False) for info in other_snake_infos)
-    my_near_star = any(_within_star_diamond(head, star, field_size) for star in stars)
-    star_close_dist = min((_manhattan_distance(head, star, field_size) for star in stars), default=999)
-    max_opp_len = max((info.get("len", 0) for info in other_snake_infos), default=0)
-
-    loop_mode = False
-    tail_pos = my_body[-1] if my_length > 1 else head
-
-    best_direction = current_direction
-    best_score = -float("inf")
-    best_alternative_direction = None
-    best_alternative_score = -float("inf")
-
-    for direction, vector in _DIRECTION_VECTORS.items():
-        if is_reverse_direction(direction, current_direction):
-            continue
-
-        next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-
-        # Avoid stepping into dead-snake hazard cells
-        if next_pos in dead_hazard:
-            # treat as nearly fatal; continue to next direction
-            logger.debug("Skipping move into dead-snake hazard cell %s", next_pos)
-            continue
-        if clear_time.get(next_pos, 0) > 1:
-            continue
-
-        score = 0
-
-        if 'aggressive_zones' in locals() and next_pos in aggressive_zones:
-            score -= aggressive_zone_penalty
-            logger.debug("Applied aggressive zone penalty %s at %s", aggressive_zone_penalty, next_pos)
-
-        dist_to_star = 999
-        if stars:
-            dist_to_star = min(_manhattan_distance(next_pos, star, field_size) for star in stars)
-            if my_near_star and enemy_near_star:
-                score += dist_to_star * 220
-                if next_pos in bad_apple_set:
-                    score += 7000
-                if dist_to_star <= 2:
-                    score -= 13000
-            else:
-                score += max(0, 9500 - dist_to_star * 1400)
-                if star_close_dist <= 3:
-                    score += max(0, 10000 - dist_to_star * 1400)
-                if enemy_near_star and dist_to_star <= 3:
-                    score += 4800
-
-        # If an opponent already has or is about to get the star, increase evasion weight
-        for info in other_snake_infos:
-            try:
-                opp_head = info.get("head")
-                if opp_head is None:
-                    continue
-                dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
-                opp_len = info.get("len", 0)
-                has_star = info.get("has_star", False)
-                will_have_star = info.get("will_have_star", False)
-                star_ticks = int(info.get("star_ticks_remaining", 0) or 0)
-                in_attack_window = bool(info.get("star_attack_window", False))
-
-                # If opponent is in star attack window, strongly avoid nearby tiles
-                if in_attack_window or has_star or will_have_star:
-                    if dist_to_opp <= 1:
-                        score -= aggressive_zone_penalty * 8
-                    elif dist_to_opp == 2:
-                        score -= aggressive_zone_penalty * 4
-                    elif dist_to_opp <= 4:
-                        score -= aggressive_zone_penalty * 2
-                    else:
-                        score += dist_to_opp * 50
-            except Exception:
-                continue
-            
-        # If my snake is near a star and can safely take it, reward strong pursuit
-        if stars:
-            closest_star = min(stars, key=lambda star: _manhattan_distance(head, star, field_size))
-            if _manhattan_distance(head, closest_star, field_size) <= 6:
-                if not any(opp_head == closest_star or _manhattan_distance(opp_head, closest_star, field_size) <= 2 for opp_head in opponent_heads):
-                    score += 15000 - _manhattan_distance(next_pos, closest_star, field_size) * 850
-
-        if direction == current_direction:
-            score += 5
-            if consecutive_same_streak >= 1:
-                score -= 2000 * consecutive_same_streak
-
-        max_safety_check = max(my_length + 5, 15)
-        # Use dead_hazard as blocked cells for pocket calculation to avoid pockets blocked by dead bodies
-        pocket_volume = _calculate_dynamic_pocket(next_pos, clear_time, dead_hazard, bad_apple_set, width, height, max_safety_check)
-
-        # Feature-based linear scoring (concise policy)
-        try:
-            features = extract_features(next_pos, head, stars, apples, other_snake_infos, pocket_volume, dead_hazard, star_spawn_points or [], field_size, current_direction, consecutive_same_streak)
-            weights = default_weights()
-            # override a few weights from CLI tunables
-            weights['pocket'] = float(preposition_weight)
-            weights['dist_to_spawn'] = -float(spawn_weight)
-            weights['opponent_in_attack_window'] = -float(aggressive_zone_penalty)
-            weights['dead_hazard'] = -float(max(aggressive_zone_penalty, abs(weights.get('dead_hazard',0))))
-            lin_score = score_features(features, weights)
-            score += lin_score
-            if anticipate_star and not stars:
-                logger.debug("Prepositioning features=%s lin_score=%.1f", {k:features[k] for k in ['dist_to_spawn','pocket'] if k in features}, lin_score)
-        except Exception:
+            self.session.post(self._url("/snake/direction"), json={"direction": direction}, timeout=self.timeout)
+        except requests.RequestException:
             pass
 
-        if one_vs_one and other_snake_infos:
-            opp_info = other_snake_infos[0]
-            opp_head = opp_info.get("head")
-            opp_len = opp_info.get("len", 0)
-            dist_to_opp_head = _manhattan_distance(next_pos, opp_head, field_size) if opp_head is not None else 999
-            if opponent_has_star:
-                score += dist_to_opp_head * 300
-                if next_pos in bad_apple_set and pocket_volume >= my_length + 1:
-                    score += 8500
-                if dist_to_opp_head >= 4:
-                    score += 1200
-            else:
-                if dist_to_opp_head <= 2:
-                    score += 13000 if my_length >= opp_len - 1 else -10000
-                elif dist_to_opp_head <= 4:
-                    score += 2600
+    def activate(self, item: str) -> None:
+        try:
+            self.session.post(self._url("/snake/activate"), json={"item": item}, timeout=self.timeout)
+        except requests.RequestException:
+            pass
 
-        if direction != current_direction and pocket_volume >= my_length + 1:
-            score += 2600 + min(consecutive_same_streak * 580, 2200)
 
-        if consecutive_same_streak >= 2:
-            if direction == current_direction:
-                score -= 7000
-            elif pocket_volume >= my_length + 1:
-                score += 4200
+def wrap(pos: Coord, size: Coord) -> Coord:
+    return pos[0] % size[0], pos[1] % size[1]
 
-        # Encourage moving toward reachable stars by path cost rather than pure direct distance
-        if stars:
-            star_cost, star_steps = _dijkstra_to_nearest_apple(next_pos, stars, bad_apple_set, clear_time, dead_cells, width, height)
-            if star_cost < 999999:
-                score += max(0, 9000 - star_cost * 25 - star_steps * 400)
-                if star_steps == 0:
-                    score += 25000
-            else:
-                score -= 1000
 
-        if apples:
-            apple_cost, apple_steps = _dijkstra_to_nearest_apple(next_pos, apples, bad_apple_set, clear_time, dead_cells, width, height)
-            if apple_cost < 999999:
-                score += max(0, 2500 - apple_cost * 18 - apple_steps * 250)
+def step(pos: Coord, direction: Direction, size: Coord) -> Coord:
+    dx, dy = DIRECTIONS[direction]
+    return wrap((pos[0] + dx, pos[1] + dy), size)
 
-        if pocket_volume < my_length + 1:
-            score -= 2000000000
-            score += pocket_volume * 100000
-        else:
-            score += pocket_volume * 10000
 
-        if my_length > 18:
-            score -= (my_length - 18) * 850
-        elif my_length < 6:
-            score += (6 - my_length) * 900
+def torus_delta(a: int, b: int, modulus: int) -> int:
+    raw = b - a
+    if raw > modulus // 2:
+        raw -= modulus
+    if raw < -modulus // 2:
+        raw += modulus
+    return raw
 
-        score += random.uniform(-110, 110)
 
-        if next_pos in bad_apple_set:
-            if my_near_star and enemy_near_star:
-                score += 5000
-            elif one_vs_one and opponent_has_star:
-                score += 4000
-            else:
-                score -= 100000000 
+def torus_dist(a: Coord, b: Coord, size: Coord) -> int:
+    return abs(torus_delta(a[0], b[0], size[0])) + abs(torus_delta(a[1], b[1], size[1]))
 
-        # Opportunistic attack: if opponent has just got star but we are significantly larger and have space, consider attack
-        for info in other_snake_infos:
-            try:
-                if not info:
-                    continue
-                opp_head = info.get("head")
-                opp_len = info.get("len", 0)
-                star_ticks = int(info.get("star_ticks_remaining", 0) or 0)
-                in_attack_window = bool(info.get("star_attack_window", False))
 
-                # If we currently have star attack time, prioritize killing opponents
-                if my_star_ticks_remaining and my_star_ticks_remaining > 0:
-                    # moving onto an opponent head is an instant kill
-                    if opp_head and next_pos == opp_head:
-                        score += opportunistic_kill_bonus * 3
-                        logger.debug("Instant-kill move prioritized against %s", opp_head)
-                    # moving adjacent to an opponent head sets up immediate kill
-                    elif opp_head and _manhattan_distance(next_pos, opp_head, field_size) == 1:
-                        score += opportunistic_kill_bonus * 1.5
-                    # moving onto opponent body (penetration) shortens them
-                    elif opp_head and next_pos in info.get("body", [])[1:]:
-                        score += opportunistic_kill_bonus
+def normalize_coord(value: Any) -> Optional[Coord]:
+    if isinstance(value, (list, tuple)) and len(value) >= 2:
+        try:
+            return int(value[0]), int(value[1])
+        except (TypeError, ValueError):
+            return None
+    return None
 
-                # If opponent is in their star-attack window, avoid them strongly
-                if in_attack_window:
-                    if opp_head and _manhattan_distance(next_pos, opp_head, field_size) <= 2:
-                        score -= aggressive_zone_penalty * 10
-                        logger.debug("Avoiding opponent in attack window at %s", opp_head)
-            except Exception:
-                continue
-        
-        # --- UNIVERSAL PROXIMITY HAZARD FILTER ---
-        # Safeguards the snake uniformly, whether in loop defensive mode or aggressive hunting
-        for opp_head in opponent_heads:
-            dist_to_opp = _manhattan_distance(next_pos, opp_head, field_size)
-            opp_len = opp_head_to_len.get(opp_head, 0)
-            
-            if dist_to_opp == 1:
-                # Next tile shares an edge with an enemy head. They can occupy it this turn.
-                if my_length > opp_len + 1:
-                    if loop_mode:
-                        # Even if bigger, avoid running into them head-on while holding a safe tail-loop
-                        score -= 200000000
-                    else:
-                        score += 1000000    # Intentionally bully them if actively in hunting mode
-                else:
-                    # Absolute danger zone: Severe penalty to prevent unexpected head-on elimination
-                    score -= 1500000000
 
-        # --- MODE-SPECIFIC PATH SELECTION ---
-        if loop_mode:
-            cost, steps = _dijkstra_to_nearest_apple(next_pos, [tail_pos], bad_apple_set, clear_time, dead_cells, width, height)
-            if cost < 999999:
-                score += (1000 - steps) * 200000
-            else:
-                dist_to_tail = _manhattan_distance(next_pos, tail_pos, field_size)
-                score += (100 - dist_to_tail) * 500
-        else:
-            # Standard Aggressive Play
-            if attack_mode and winning_snake_head:
-                dist_to_winner = _manhattan_distance(next_pos, winning_snake_head, field_size)
-                score += (1000 - dist_to_winner) * 1000
-            else:
-                cost, steps = _dijkstra_to_nearest_apple(next_pos, apples, bad_apple_set, clear_time, dead_cells, width, height)
-                if cost < 999999:
-                    score += (1000 - steps) * (2000 if is_crowded_phase else 4000)
-                    score -= cost * 50  
-                else:
-                    score += pocket_volume * 5
+def parse_snakes(raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    source = raw.get("snakes", raw.get("snake", {}))
+    if not isinstance(source, dict):
+        return {}
 
-        if score > best_score:
-            best_score = score
-            best_direction = direction
+    snakes: Dict[str, Dict[str, Any]] = {}
+    for team, info in source.items():
+        if not isinstance(info, dict):
+            continue
+        body = [c for c in (normalize_coord(x) for x in info.get("body", [])) if c is not None]
+        inventory = info.get("inventory", info.get("items", []))
+        if not isinstance(inventory, list):
+            inventory = []
+        active_effects = info.get("active_effects", [])
+        if not isinstance(active_effects, list):
+            active_effects = []
+        snakes[str(team)] = {
+            "body": body,
+            "alive": bool(info.get("alive", True)),
+            "inventory": [str(x) for x in inventory],
+            "active_effects": active_effects,
+        }
+    return snakes
 
-        if direction != current_direction and score > best_alternative_score:
-            best_alternative_score = score
-            best_alternative_direction = direction
 
-    if best_direction == current_direction and best_alternative_direction is not None:
-        if consecutive_same_streak >= 2 and best_alternative_score + 1500 >= best_score:
-            return best_alternative_direction
-        if consecutive_same_streak >= 3:
-            return best_alternative_direction
+def parse_items(raw: Dict[str, Any]) -> Dict[Coord, str]:
+    items: Dict[Coord, str] = {}
 
-    if best_score == -float("inf"):
-        for direction, vector in _DIRECTION_VECTORS.items():
-            if is_reverse_direction(direction, current_direction):
-                continue
-            next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
-            if next_pos not in dead_cells and clear_time.get(next_pos, 0) <= 1:
-                return direction
-        return current_direction
+    raw_items = raw.get("items", raw.get("item", []))
+    if isinstance(raw_items, dict):
+        iterable: Iterable[Any] = raw_items.values()
+    elif isinstance(raw_items, list):
+        iterable = raw_items
+    else:
+        iterable = []
 
-    return best_direction
+    for entry in iterable:
+        pos: Optional[Coord] = None
+        kind: Optional[str] = None
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Snake game bot client")
-    parser.add_argument("team_name")
-    parser.add_argument("game_name")
-    parser.add_argument("--password", default="test")
-    parser.add_argument("--base_url", default="http://localhost:3030")
-    parser.add_argument("--star-anticipation-window", type=int, default=DEFAULT_STAR_ANTICIPATION_WINDOW, help="ticks before spawn to start pre-positioning")
-    parser.add_argument("--star-preposition-weight", type=int, default=DEFAULT_STAR_PREPOSITION_WEIGHT, help="weight multiplier for pocket volume when anticipating star")
-    parser.add_argument("--star-spawn-weight", type=int, default=DEFAULT_STAR_SPAWN_WEIGHT, help="base reward for being near spawn point when star imminent")
-    parser.add_argument("--aggressive-penalty", type=int, default=DEFAULT_AGGRESSIVE_ZONE_PENALTY, help="penalty for entering predicted aggressive zones")
-    parser.add_argument("--opportunistic-kill-bonus", type=int, default=DEFAULT_OPPORTUNISTIC_KILL_BONUS, help="bonus score for safe kill opportunities on star carriers")
-    parser.add_argument("--log-level", default="INFO", help="logging level (DEBUG/INFO/WARNING)")
-    parser.add_argument("--dead-snake-buffer", type=int, default=DEFAULT_DEAD_SNAKE_BUFFER, help="cells radius around dead snake bodies treated as hazardous")
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            if isinstance(entry[0], (list, tuple)):
+                pos = normalize_coord(entry[0])
+                kind = str(entry[1])
+            elif isinstance(entry[1], (list, tuple)):
+                kind = str(entry[0])
+                pos = normalize_coord(entry[1])
+
+        # Possible object format.
+        if isinstance(entry, dict):
+            pos = normalize_coord(entry.get("position", entry.get("coord", entry.get("pos"))))
+            kind = entry.get("kind", entry.get("type", entry.get("item")))
+            if kind is not None:
+                kind = str(kind)
+
+        if pos is not None and kind is not None:
+            items[pos] = kind
+
+    return items
+
+
+def infer_direction(body: Sequence[Coord], fallback: Direction, size: Coord) -> Direction:
+    if len(body) < 2:
+        return fallback
+    head, neck = body[0], body[1]
+    for direction in DIRECTIONS:
+        if step(neck, direction, size) == head:
+            return direction
+    return fallback
+
+
+def occupied_cells(snakes: Dict[str, Dict[str, Any]], own_team: str) -> Set[Coord]:
+    occupied: Set[Coord] = set()
+    for team, snake in snakes.items():
+        if not snake["alive"]:
+            continue
+        body = snake["body"]
+        if not body:
+            continue
+
+        # Be slightly optimistic about our own tail because it normally moves away.
+        # Keep all enemy tails blocked because they may grow or item effects may alter movement.
+        cells = body[:-1] if team == own_team and len(body) > 1 else body
+        occupied.update(cells)
+    return occupied
+
+
+def enemy_heads(snakes: Dict[str, Dict[str, Any]], own_team: str) -> List[Coord]:
+    heads: List[Coord] = []
+    for team, snake in snakes.items():
+        if team != own_team and snake["alive"] and snake["body"]:
+            heads.append(snake["body"][0])
+    return heads
+
+
+def enemy_possible_next_cells(heads: Sequence[Coord], size: Coord) -> Set[Coord]:
+    cells: Set[Coord] = set()
+    for head in heads:
+        for direction in DIRECTIONS:
+            cells.add(step(head, direction, size))
+    return cells
+
+
+def flood_fill(start: Coord, blocked: Set[Coord], size: Coord, limit: int = 600) -> int:
+    if start in blocked:
+        return 0
+
+    queue = deque([start])
+    seen = {start}
+
+    while queue and len(seen) < limit:
+        pos = queue.popleft()
+        for direction in DIRECTIONS:
+            nxt = step(pos, direction, size)
+            if nxt not in seen and nxt not in blocked:
+                seen.add(nxt)
+                queue.append(nxt)
+
+    return len(seen)
+
+
+def exit_count(pos: Coord, blocked: Set[Coord], size: Coord) -> int:
+    return sum(1 for direction in DIRECTIONS if step(pos, direction, size) not in blocked)
+
+
+def nearest_item_bonus(pos: Coord, items: Dict[Coord, str], size: Coord) -> float:
+    best = 0.0
+    for item_pos, kind in items.items():
+        value = ITEM_VALUE.get(kind, 0.0)
+        if value <= 0:
+            continue
+        distance = max(1, torus_dist(pos, item_pos, size))
+        # Nearby powerups matter much more than far-away ones.
+        best = max(best, value / distance)
+    return best
+
+
+def choose_direction(
+    team: str,
+    raw: Dict[str, Any],
+    last_direction: Direction,
+) -> Tuple[Direction, Dict[Direction, float]]:
+    size = tuple(raw.get("size", (41, 41)))  # type: ignore[arg-type]
+    size = (int(size[0]), int(size[1]))
+
+    snakes = parse_snakes(raw)
+    own = snakes.get(team)
+
+    if own is None or not own["body"]:
+        return last_direction, {last_direction: 0.0}
+
+    body: List[Coord] = own["body"]
+    head = body[0]
+    current_direction = infer_direction(body, last_direction, size)
+
+    blocked = occupied_cells(snakes, team)
+    heads = enemy_heads(snakes, team)
+    enemy_next = enemy_possible_next_cells(heads, size)
+    items = parse_items(raw)
+    center = (size[0] // 2, size[1] // 2)
+
+    scores: Dict[Direction, float] = {}
+    for direction in DIRECTIONS:
+        first = step(head, direction, size)
+
+        # Avoid instant 180-degree reversal when the neck is a real separate cell.
+        if len(body) > 1 and body[1] != head and direction == OPPOSITE.get(current_direction):
+            scores[direction] = -2_000_000.0
+            continue
+
+        if first in blocked:
+            scores[direction] = -1_000_000.0
+            continue
+
+        score = 0.0
+        score += 10_000.0
+
+        ff = flood_fill(first, blocked, size, limit=max(200, size[0] * size[1]))
+        score += ff * 18.0
+
+        exits = exit_count(first, blocked, size)
+        score += exits * 120.0
+        if exits <= 1:
+            score -= 1200.0
+        elif exits == 2:
+            score -= 250.0
+
+        # Direct item on next cell.
+        item_here = items.get(first)
+        if item_here:
+            score += ITEM_VALUE.get(item_here, 0.0)
+
+        # Special final-round center rule: exact center is often a BadApple and a traffic trap.
+        if first == center:
+            score -= 1600.0
+        center_distance = torus_dist(first, center, size)
+        if 2 <= center_distance <= 5:
+            score += 160.0
+        elif center_distance <= 1:
+            score -= 350.0
+
+        # Enemy danger.
+        if first in enemy_next:
+            score -= 900.0
+
+        adjacent_enemy_heads = sum(1 for h in heads if torus_dist(first, h, size) <= 1)
+        near_enemy_heads = sum(1 for h in heads if torus_dist(first, h, size) <= 2)
+        score -= adjacent_enemy_heads * 700.0
+        score -= near_enemy_heads * 200.0
+
+        # Prefer continuing straight when all else is equal, but not too much.
+        if direction == current_direction:
+            score += 90.0
+
+        # Pull toward useful nearby items, but do not override survival.
+        score += nearest_item_bonus(first, items, size) * 2.2
+
+        # Random tiny tie-breaker prevents deterministic collision with mirror bots.
+        score += random.random() * 3.0
+
+        scores[direction] = score
+
+    best_direction = max(scores, key=scores.get)
+    if scores[best_direction] < -900_000:
+        # Absolute emergency: pick any direction, preferably not reverse.
+        legal = [d for d in DIRECTIONS if d != OPPOSITE.get(current_direction)]
+        best_direction = random.choice(legal or list(DIRECTIONS))
+
+    return best_direction, scores
+
+
+def cell_safe(pos: Coord, blocked: Set[Coord]) -> bool:
+    return pos not in blocked
+
+
+def should_activate_item(team: str, raw: Dict[str, Any], direction: Direction) -> Optional[str]:
+    size = tuple(raw.get("size", (41, 41)))  # type: ignore[arg-type]
+    size = (int(size[0]), int(size[1]))
+
+    snakes = parse_snakes(raw)
+    own = snakes.get(team)
+    if own is None or not own["body"] or not own["alive"]:
+        return None
+
+    inventory = set(own.get("inventory", []))
+    if not inventory:
+        return None
+
+    body: List[Coord] = own["body"]
+    head = body[0]
+    first = step(head, direction, size)
+    second = step(first, direction, size)
+    blocked = occupied_cells(snakes, team)
+    heads = enemy_heads(snakes, team)
+    items = parse_items(raw)
+    center = (size[0] // 2, size[1] // 2)
+
+    enemy_close = any(torus_dist(head, h, size) <= 3 for h in heads)
+    enemy_can_contest_first = first in enemy_possible_next_cells(heads, size)
+    near_center = torus_dist(head, center, size) <= 7
+
+    # Star: if activatable, use it for center fights or enemy contact.
+    if "Star" in inventory and (enemy_close or near_center):
+        return "Star"
+
+    # Sword: 42-style aggression, but only when contact/contest is plausible.
+    if "Sword" in inventory and (enemy_close or enemy_can_contest_first or near_center):
+        return "Sword"
+
+    # SpeedBoost: Titanaboa-style mobility with strict 2-cell safety.
+    if "SpeedBoost" in inventory:
+        second_item = items.get(second)
+        second_value = ITEM_VALUE.get(second_item or "", 0.0)
+        second_space = flood_fill(second, blocked, size, limit=max(200, size[0] * size[1]))
+        second_enemy_risk = any(torus_dist(second, h, size) <= 1 for h in heads)
+        bad_center_path = first == center or second == center
+
+        if (
+            cell_safe(first, blocked)
+            and cell_safe(second, blocked)
+            and not second_enemy_risk
+            and not bad_center_path
+            and (
+                second_value >= ITEM_VALUE["Apple"]
+                or second_space > len(body) + 25
+                or (near_center and second_value > 0)
+            )
+        ):
+            return "SpeedBoost"
+
+    # InstantStack: likely score/growth; use when not in immediate cramped danger.
+    if "InstantStack" in inventory:
+        space_here = flood_fill(first, blocked, size, limit=max(200, size[0] * size[1]))
+        if space_here > len(body) + 15 and not enemy_can_contest_first:
+            return "InstantStack"
+
+    return None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Boss-final Snake bot")
+    parser.add_argument("team_name", help="Name of the team/snake")
+    parser.add_argument("game_name", help="Name of the game, e.g. Final")
+    parser.add_argument("--password", default="test", help="Password for server")
+    parser.add_argument("--base_url", default="http://localhost:3030", help="Base URL, e.g. http://192.168.7.211:3030")
+    parser.add_argument("--tick_seconds", type=float, default=0.92, help="Client loop interval. Keep below/near server tick, not spammy.")
     args = parser.parse_args()
 
-    # apply log level
-    try:
-        logger.setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
-    except Exception:
-        logger.setLevel(logging.INFO)
+    api = SnakeAPI(args.base_url, args.team_name, args.game_name, args.password)
 
-    api = SnakeFieldAPI(args.base_url, args.team_name, args.game_name, args.password)
-    alive = True
-    currentDirectionStr = "NORTH"
-    same_direction_count = 0
-    tick_counter = 0  # local tick/frame counter to predict periodic star spawns
-    prev_star_count = 0
+    last_direction: Direction = "NORTH"
+    last_activation_tick = -999999
+    tick = 0
 
-    api.set_direction(to_api_direction(currentDirectionStr))
+    # Register once.
+    api.set_direction(last_direction)
 
-    while alive:
-        time.sleep(0.5)  
+    while True:
+        loop_start = time.monotonic()
+
         try:
-            field = api.get_field()
-            if field is None: 
-                continue
-            tick_counter += 1
-            # determine star spawn interval from field metadata (default 15)
-            star_interval = getattr(field, "star_every_ticks", None) or getattr(field, "starEveryTicks", None) or 15
-            try:
-                star_interval = int(star_interval)
-                if star_interval <= 0:
-                    star_interval = 15
-            except Exception:
-                star_interval = 15
-            # predict ticks until next star spawn
-            ticks_until_next_star = (star_interval - (tick_counter % star_interval)) % star_interval
+            raw = api.state()
+            snakes = parse_snakes(raw)
+            own = snakes.get(args.team_name)
 
-            my_snake = field.snakes.get(args.team_name)
-            if not my_snake or not my_snake.alive: 
-                break
+            if own is not None and own["alive"] is False:
+                print("Snake is dead. Stopping.")
+                return
 
-            head = my_snake.body[0]
-            raw_items = getattr(field, "items", [])
-            apples = []
-            bad_apples = []
-            stars = []
+            direction, scores = choose_direction(args.team_name, raw, last_direction)
+            last_direction = direction
 
-            if isinstance(raw_items, list):
-                for entry in raw_items:
-                    if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                        pos, type_ = entry
-                        if isinstance(pos, (list, tuple)) and len(pos) == 2:
-                            coord = (int(pos[0]), int(pos[1]))
-                            t_str = to_internal_str(type_)
-                            if "APPLE" in t_str and "BAD" not in t_str:
-                                apples.append(coord)
-                            elif "BAD" in t_str:
-                                bad_apples.append(coord)
-                            elif "STAR" in t_str:
-                                stars.append(coord)
-                    elif isinstance(entry, dict):
-                        pos = entry.get("position") or entry.get("pos") or entry.get("coords")
-                        type_ = entry.get("type") or entry.get("item_type")
-                        if isinstance(pos, (list, tuple)) and len(pos) == 2:
-                            coord = (int(pos[0]), int(pos[1]))
-                            t_str = to_internal_str(type_)
-                            if "APPLE" in t_str and "BAD" not in t_str:
-                                apples.append(coord)
-                            elif "BAD" in t_str:
-                                bad_apples.append(coord)
-                            elif "STAR" in t_str:
-                                stars.append(coord)
-                    else:
-                        try:
-                            p = getattr(entry, "position", None) or getattr(entry, "pos", None)
-                            t = getattr(entry, "type", None) or getattr(entry, "item_type", None)
-                            if p and t and len(p) >= 2:
-                                coord = (int(p[0]), int(p[1]))
-                                t_str = to_internal_str(t)
-                                if "APPLE" in t_str and "BAD" not in t_str:
-                                    apples.append(coord)
-                                elif "BAD" in t_str:
-                                    bad_apples.append(coord)
-                                elif "STAR" in t_str:
-                                    stars.append(coord)
-                        except Exception:
-                            pass
+            # At most one activation per loop. No spamming.
+            item_to_activate = should_activate_item(args.team_name, raw, direction)
+            if item_to_activate is not None and tick - last_activation_tick >= 1:
+                api.activate(item_to_activate)
+                last_activation_tick = tick
 
-            if not apples and hasattr(field, "apples"):
-                for a in getattr(field, "apples", []):
-                    if isinstance(a, (list, tuple)) and len(a) == 2:
-                        apples.append((int(a[0]), int(a[1])))
-            if not bad_apples and hasattr(field, "bad_apples"):
-                for ba in getattr(field, "bad_apples", []):
-                    if isinstance(ba, (list, tuple)) and len(ba) == 2:
-                        bad_apples.append((int(ba[0]), int(ba[1])))
-            
-            other_snakes = []
-            other_snake_infos = []
-            dead_snakes = []
-            for name, snake in field.snakes.items():
-                if name == args.team_name:
-                    continue
-                if snake.alive:
-                    opp_head = snake.body[0] if snake.body else None
-                    has_star = any("STAR" in str(item).upper() for item in snake.inventory)
-                    # active star/invinc effects
-                    star_ticks_remaining = 0
-                    for eff in getattr(snake, "active_effects", []):
-                        try:
-                            ename = getattr(eff, "effect", str(eff)).upper()
-                            rem = int(getattr(eff, "remaining_ticks", 0))
-                            if "STAR" in ename or "INVINC" in ename:
-                                star_ticks_remaining = max(star_ticks_remaining, rem)
-                                has_star = True
-                        except Exception:
-                            continue
-                    will_have_star = False
-                    if opp_head is not None:
-                        will_have_star = any(_manhattan_distance(opp_head, star, field.size) <= 2 for star in stars)
-                    # estimate opponent facing direction
-                    opp_dir = None
-                    try:
-                        if opp_head is not None:
-                            opp_dir = _infer_current_direction(opp_head, snake.body, field.size[0], field.size[1], "NORTH")
-                    except Exception:
-                        opp_dir = None
-                    # compute near-star flags
-                    other_snakes.append(snake.body)
-                    body_near_star = _snake_body_near_star(snake.body, stars, field.size)
-                    head_near_star = False
-                    if opp_head is not None:
-                        head_near_star = any(_manhattan_distance(opp_head, star, field.size) <= 3 for star in stars)
-                    # attack window: first 5 ticks after getting star
-                    star_attack_window = 1 <= star_ticks_remaining <= 5
-                    other_snake_infos.append({
-                        "body": snake.body,
-                        "head": opp_head,
-                        "len": len(snake.body),
-                        "has_star": has_star,
-                        "will_have_star": will_have_star,
-                        "body_near_star": body_near_star,
-                        "head_near_star": head_near_star,
-                        "star_ticks_remaining": star_ticks_remaining,
-                        "star_attack_window": star_attack_window,
-                        "direction": opp_dir,
-                    })
-                else:
-                    dead_snakes.append(snake.body)
+            api.set_direction(direction)
 
-            winning_snake_head = None
-            max_opp_len = 0
-            for name, snake in field.snakes.items():
-                if name != args.team_name and snake.alive and len(snake.body) > max_opp_len:
-                    max_opp_len = len(snake.body)
-                    winning_snake_head = snake.body[0]
+            compact_scores = " ".join(f"{d}:{scores.get(d, 0):.0f}" for d in ("NORTH", "EAST", "SOUTH", "WEST"))
+            inv = own.get("inventory", []) if own else []
+            print(f"tick={tick:05d} dir={direction:5s} item={item_to_activate or '-':12s} inv={inv} {compact_scores}")
 
-            attack_mode = max_opp_len > (len(my_snake.body) + 3) or max_opp_len > 20
-            # detect my star ticks
-            my_star_ticks_remaining = 0
-            for eff in getattr(my_snake, "active_effects", []):
-                try:
-                    ename = getattr(eff, "effect", str(eff)).upper()
-                    rem = int(getattr(eff, "remaining_ticks", 0))
-                    if "STAR" in ename or "INVINC" in ename:
-                        my_star_ticks_remaining = max(my_star_ticks_remaining, rem)
-                except Exception:
-                    continue
+        except KeyboardInterrupt:
+            return
+        except Exception as exc:
+            # Network hiccup or unexpected JSON should not crash the bot during finals.
+            print(f"recoverable error: {type(exc).__name__}: {exc}")
+            api.set_direction(last_direction)
 
-            next_direction = compute_direction_master(
-                head=head,
-                apples=apples,
-                bad_apples=bad_apples,
-                stars=stars,
-                current_direction_raw=currentDirectionStr,
-                consecutive_same_streak=same_direction_count,
-                other_snakes=other_snakes,
-                other_snake_infos=other_snake_infos,
-                field_size=getattr(field, "size", (20, 20)),
-                my_body=my_snake.body,
-                winning_snake_head=winning_snake_head,
-                attack_mode=attack_mode,
-                dead_snakes=dead_snakes,
-                ticks_until_star=ticks_until_next_star,
-                star_spawn_points=getattr(field, "star_spawn_points", []),
-                my_star_ticks_remaining=my_star_ticks_remaining,
-                anticipation_window=args.star_anticipation_window,
-                preposition_weight=args.star_preposition_weight,
-                spawn_weight=args.star_spawn_weight,
-                aggressive_zone_penalty=args.aggressive_penalty,
-                opportunistic_kill_bonus=args.opportunistic_kill_bonus,
-                dead_snake_buffer=args.dead_snake_buffer,
-            )
-            same_direction_count = same_direction_count + 1 if next_direction == currentDirectionStr else 0
-            currentDirectionStr = next_direction
-            # synchronize local tick counter with observed star spawns
-            if len(stars) > 0 and prev_star_count == 0:
-                tick_counter = 0
-            prev_star_count = len(stars)
-            
-            api_ready_dir = to_api_direction(currentDirectionStr)
-            if not api.set_direction(api_ready_dir):
-                logger.warning(f"Network missed direction update to {currentDirectionStr}")
-                
-        except Exception as e:
-            logger.error(f"Handled runtime frame anomaly: {e}", exc_info=True)
+        tick += 1
+        elapsed = time.monotonic() - loop_start
+        time.sleep(max(0.05, args.tick_seconds - elapsed))
+
+
+if __name__ == "__main__":
+    main()
+
