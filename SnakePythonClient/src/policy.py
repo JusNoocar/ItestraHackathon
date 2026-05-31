@@ -12,12 +12,15 @@ def score_features(f: Dict[str, float], weights: Dict[str, float]) -> float:
 def default_weights():
     return {
         'dead_hazard': -100000.0,
-        'dist_to_star': -300.0,
+        'dist_to_star': -600.0,
         'dist_to_apple': -50.0,
         'pocket': 500.0,
-        'dist_to_nearest_opponent': 30.0,
+        'dist_to_nearest_opponent': 20.0,
         'opponent_in_attack_window': -5000.0,
-        'dist_to_spawn': -400.0,
+        'dist_to_spawn': -1200.0,
+        'star_exists': 0.0,
+        'star_attack_zone': 1400.0,
+        'invalid_move': -100000.0,
         'same_direction': 5.0,
         'repeat_streak': -200.0,
         'bad_apple_here': -100000.0,

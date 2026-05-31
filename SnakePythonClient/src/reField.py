@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from data_structures import Coord, TeamName
 
@@ -43,6 +43,7 @@ class Field:
     snakes: Dict[TeamName, SnakeInfo]
     apples: List[Coord] = field(default_factory=list)
     bad_apples: List[Coord] = field(default_factory=list)
+    stars: List[Coord] = field(default_factory=list)
     star_every_ticks: Optional[int] = None
     instructions: List = field(default_factory=list)
     star_spawn_points: List[Coord] = field(default_factory=list)
@@ -68,6 +69,7 @@ class Field:
         if "bad_apples" in raw:
             bad_apples = [tuple(coord) for coord in raw["bad_apples"]]
         
+        stars: List[Coord] = []
         if "items" in raw and isinstance(raw["items"], list):
             for item in raw["items"]:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
@@ -78,6 +80,8 @@ class Field:
                             bad_apples.append(coord)
                         elif kind == "Apple":
                             apples.append(coord)
+                        elif kind == "Star" or kind == "star":
+                            stars.append(coord)
                         else:
                             apples.append(coord)
                 elif isinstance(item, dict):
@@ -89,6 +93,8 @@ class Field:
                             bad_apples.append(coord)
                         elif kind == "Apple":
                             apples.append(coord)
+                        elif kind == "Star" or kind == "star":
+                            stars.append(coord)
                         else:
                             apples.append(coord)
 
@@ -112,4 +118,4 @@ class Field:
             except Exception:
                 continue
 
-        return Field(size=size, snakes=snakes, apples=apples, bad_apples=bad_apples, star_every_ticks=star_every_ticks, instructions=instructions, star_spawn_points=star_spawn_points)
+        return Field(size=size, snakes=snakes, apples=apples, bad_apples=bad_apples, stars=stars, star_every_ticks=star_every_ticks, instructions=instructions, star_spawn_points=star_spawn_points)

@@ -24,11 +24,13 @@ def extract_features(next_pos: Coord,
                      ) -> Dict[str, float]:
     f = {}
     f['dead_hazard'] = 1.0 if next_pos in dead_hazard_set else 0.0
-    # nearest star
+    f['star_exists'] = 1.0 if stars else 0.0
     if stars:
         f['dist_to_star'] = min(_manhattan_toroid(next_pos, s, field_size) for s in stars)
+        f['star_attack_zone'] = float(min(_manhattan_toroid(next_pos, s, field_size) for s in stars) <= 2)
     else:
         f['dist_to_star'] = 999.0
+        f['star_attack_zone'] = 0.0
     # nearest apple
     if apples:
         f['dist_to_apple'] = min(_manhattan_toroid(next_pos, a, field_size) for a in apples)

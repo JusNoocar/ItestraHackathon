@@ -6,6 +6,7 @@ from typing import List, Optional, Tuple, Set
 
 from api import SnakeFieldAPI
 from data_structures import Direction
+from star_predictor import predict_star
 from rl_agent import RLAgent
 from policy import default_weights
 from features import extract_features
@@ -260,12 +261,19 @@ def compute_direction_toward_nearest_apple(
     attack_mode: bool = False,
     dead_snakes: List[List[Coord]] = None,
     bad_apples: List[Coord] = None,
+    stars: List[Coord] = None,
+    star_spawn_points: List[Coord] = None,
+    ticks_until_star: Optional[int] = None,
+    my_has_star: bool = False,
+    opponent_has_star: bool = False,
 ) -> Direction:
-    """Enhanced AI for high bad apple spawn rate environment."""
+    """Enhanced AI for high bad apple spawn rate environment with star handling."""
     width, height = field_size
     other_snakes = other_snakes or []
     dead_snakes = dead_snakes or []
     bad_apples = bad_apples or []
+    stars = stars or []
+    star_spawn_points = star_spawn_points or []
     my_body = my_body or [head]
     my_length = len(my_body)
 
@@ -312,6 +320,8 @@ def compute_direction_toward_nearest_apple(
     
     # Check if we're surrounded by bad apples (emergency situation)
     is_surrounded_by_poison = current_bad_density >= 4
+    anticipate_star = isinstance(ticks_until_star, int) and ticks_until_star <= 4
+    star_timer_bonus = 1 if anticipate_star and not stars else 0
 
     best_direction = current_direction
     best_score = -float("inf")
@@ -346,6 +356,24 @@ def compute_direction_toward_nearest_apple(
         elif bad_density_next >= 2:
             score -= 200
 
+        # Star pursuit / prepositioning
+        if stars:
+            next_star_dist = min(_manhattan_distance(next_pos, star, field_size) for star in stars)
+            if next_star_dist <= 2:
+                score += 18000 - next_star_dist * 1000
+            elif next_star_dist <= 5:
+                score += 9000 - next_star_dist * 1800
+            else:
+                score += 4000 - next_star_dist * 900
+            if opponent_has_star:
+                score += max(0, 1200 - next_star_dist * 150)
+            if my_has_star:
+                score += 6400 - next_star_dist * 900
+        elif anticipate_star and star_spawn_points:
+            spawn_dist = min(_manhattan_distance(next_pos, sp, field_size) for sp in star_spawn_points)
+            score += max(0, 8500 - spawn_dist * 1200)
+            if pocket_obstacles and len(pocket_obstacles) >= my_length:
+                score += 1000
         # CRITICAL: Prioritize eating safe apples (highest weight)
         safe_obstacles = pocket_obstacles.union(bad_apple_set)
         dist_to_safe = _bfs_distance_to_nearest_apple(next_pos, safe_apples, safe_obstacles, width, height)
@@ -425,6 +453,11 @@ def compute_direction_toward_nearest_apple(
                     score += 500 * (my_length - opp_len)
                 elif dist_to_opp <= 6:
                     score += (8 - dist_to_opp) * 120
+            if my_has_star:
+                if dist_to_opp <= 3:
+                    score += 2000
+                if opp_len < my_length and dist_to_opp <= 2:
+                    score += 1200
             elif my_length >= opp_len:
                 if dist_to_opp <= 1:
                     score += 180
@@ -493,6 +526,9 @@ if __name__ == "__main__":
     currentDirection: Direction = "NORTH"
     move_count = 0
     recalc_interval = 1  # Recalculate strategy every move
+    tick_counter = 0
+    prev_has_star = False
+    prev_opponent_has_star = False
     # RL bookkeeping
     last_candidate_features = None
     last_action_idx = None
@@ -521,6 +557,8 @@ if __name__ == "__main__":
         head = my_snake.body[0]
         apples = getattr(field, "apples", []) or []
         bad_apples = getattr(field, "bad_apples", []) or []
+        stars = getattr(field, "stars", []) or []
+        star_spawn_points = getattr(field, "star_spawn_points", []) or []
 
         # Log bad apple spawn rate to monitor environment
         bad_apple_ratio = len(bad_apples) / max(1, len(bad_apples) + len(apples))
@@ -530,6 +568,7 @@ if __name__ == "__main__":
         if raw_items is not None:
             apples = []
             bad_apples = []
+            stars = []
             for item in raw_items:
                 if isinstance(item, (list, tuple)) and len(item) == 2:
                     pos, kind = item
@@ -539,6 +578,8 @@ if __name__ == "__main__":
                             bad_apples.append(coord)
                         elif kind == "Apple":
                             apples.append(coord)
+                        elif kind == "Star" or kind == "star":
+                            stars.append(coord)
                         else:
                             apples.append(coord)
                 elif isinstance(item, dict):
@@ -550,11 +591,18 @@ if __name__ == "__main__":
                             bad_apples.append(coord)
                         elif kind == "Apple":
                             apples.append(coord)
+                        elif kind == "Star" or kind == "star":
+                            stars.append(coord)
                         else:
                             apples.append(coord)
 
         other_snakes = [
             snake.body
+            for snake_name, snake in field.snakes.items()
+            if snake_name != team_name and snake.alive
+        ]
+        other_snake_infos = [
+            snake
             for snake_name, snake in field.snakes.items()
             if snake_name != team_name and snake.alive
         ]
@@ -576,7 +624,16 @@ if __name__ == "__main__":
                     max_opponent_len = len(snake.body)
                     winning_snake_head = snake.body[0]
 
+        tick_counter += 1
         my_length = len(my_snake.body)
+        current_has_star = any("star" in eff.effect.lower() for eff in my_snake.active_effects)
+        opponent_has_star = any(
+            any("star" in eff.effect.lower() for eff in snake.active_effects)
+            for snake in other_snake_infos
+        )
+        next_ticks_until_star = None
+        if isinstance(getattr(field, "star_every_ticks", None), int):
+            next_ticks_until_star, _ = predict_star(tick_counter, field.star_every_ticks, star_spawn_points)
         
         # ADAPTIVE: In high bad apple environment, be more conservative with hunting
         # Focus on survival and eating when poison spawn is high
@@ -603,6 +660,12 @@ if __name__ == "__main__":
                 # opponent died
                 if len(other_snakes) < prev_num_opponents:
                     reward += (prev_num_opponents - len(other_snakes)) * 50.0
+                # star pickup reward
+                if current_has_star and not prev_has_star:
+                    reward += 150.0
+                # star carrier takedown reward
+                if prev_opponent_has_star and not opponent_has_star:
+                    reward += 220.0
                 # small living bonus to encourage survival
                 reward += 0.1
                 try:
@@ -623,15 +686,33 @@ if __name__ == "__main__":
             directions_order = ["NORTH", "EAST", "SOUTH", "WEST"]
             for d in directions_order:
                 if is_reverse_direction(d, currentDirection):
-                    # still include the feature but mark as very low pocket
-                    candidate_features.append({})
+                    candidate_features.append({"invalid_move": 1.0})
                     continue
                 v = _DIRECTION_VECTORS[d]
                 next_pos = ((head[0] + v[0]) % width, (head[1] + v[1]) % height)
                 pocket = _calculate_pocket_volume(next_pos, obstacle_cells, width, height, min(30, len(my_snake.body) + 5))
-                opp_info = [{"head": s[0], "len": len(s)} for s in other_snakes if s]
-                f = extract_features(next_pos, head, [], apples, opp_info, pocket, dead_hazard_set, [], (width, height), currentDirection, consecutive_same_streak)
-                # explicit bad apple flag
+                opp_info = [
+                    {
+                        "head": s[0],
+                        "len": len(s),
+                        "star_attack_window": any("star" in eff.effect.lower() for eff in info.active_effects),
+                    }
+                    for s, info in zip(other_snakes, other_snake_infos)
+                    if s
+                ]
+                f = extract_features(
+                    next_pos,
+                    head,
+                    stars,
+                    apples,
+                    opp_info,
+                    pocket,
+                    dead_hazard_set,
+                    star_spawn_points,
+                    (width, height),
+                    currentDirection,
+                    consecutive_same_streak,
+                )
                 f['bad_apple_here'] = 1.0 if next_pos in set(bad_apples) else 0.0
                 candidate_features.append(f)
 
@@ -656,6 +737,11 @@ if __name__ == "__main__":
                         attack_mode=attack_mode,
                         dead_snakes=dead_snakes,
                         bad_apples=bad_apples,
+                        stars=stars,
+                        star_spawn_points=star_spawn_points,
+                        ticks_until_star=next_ticks_until_star,
+                        my_has_star=current_has_star,
+                        opponent_has_star=opponent_has_star,
                     )
             else:
                 currentDirection = compute_direction_toward_nearest_apple(
@@ -669,6 +755,11 @@ if __name__ == "__main__":
                     attack_mode=attack_mode,
                     dead_snakes=dead_snakes,
                     bad_apples=bad_apples,
+                    stars=stars,
+                    star_spawn_points=star_spawn_points,
+                    ticks_until_star=next_ticks_until_star,
+                    my_has_star=current_has_star,
+                    opponent_has_star=opponent_has_star,
                 )
             # store previous state snapshot for next-tick reward calculation
             prev_my_length = len(my_snake.body)
@@ -686,6 +777,11 @@ if __name__ == "__main__":
                     attack_mode=attack_mode,
                     dead_snakes=dead_snakes,
                     bad_apples=bad_apples,
+                    stars=stars,
+                    star_spawn_points=star_spawn_points,
+                    ticks_until_star=next_ticks_until_star,
+                    my_has_star=current_has_star,
+                    opponent_has_star=opponent_has_star,
                 )
 
         if currentDirection not in ("NORTH", "SOUTH", "EAST", "WEST"):
@@ -698,6 +794,8 @@ if __name__ == "__main__":
         else:
             consecutive_same_streak = 0
         last_direction = currentDirection
+        prev_has_star = current_has_star
+        prev_opponent_has_star = opponent_has_star
 
         if not api.set_direction(currentDirection):
             logger.warning("Failed to update direction to %s", currentDirection)
