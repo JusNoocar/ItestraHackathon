@@ -3,7 +3,6 @@ import logging
 import time
 import threading
 import json
-import random
 from typing import List, Optional, Tuple, Set, Dict
 
 from api import SnakeFieldAPI
@@ -44,26 +43,23 @@ def network_receiver_pipeline(api: SnakeFieldAPI, buffer: LowLatencyGameBuffer, 
                     buffer.field = f
         except Exception:
             pass
-        time.sleep(0.008) # Blazing fast 8ms network sampling
+        time.sleep(0.008)
 
-# ==============================================================================
-# ADVANCED MACHINE LEARNING LAYER: QUANTIZED STATE POLICY AGENT (Q-LEARNING/DQN HIERARCHY)
-# ==============================================================================
+
 class DeepLinearAgent:
-    """Reinforcement Learning Agent optimizing policy weights via Temporal Difference Q-Learning."""
     def __init__(self, alpha: float = 0.05, gamma: float = 0.9, weights_path: str = "dqn_weights.json"):
         self.alpha = alpha
         self.gamma = gamma
         self.weights_path = weights_path
         
-        # Fundamental state-feature weights initialized defensively
+        # Defensive weights tuned for high-frequency 4-tick item environments
         self.weights = {
-            "lethal_slice_risk": -15.0,
-            "voronoi_territory": 2.5,
-            "instant_stack_proximity": 4.5,
-            "upgrade_proximity": 3.0,
-            "exit_redundancy": 1.5,
-            "is_stacked_bonus": 5.0
+            "lethal_slice_risk": -25.0,
+            "voronoi_territory": 3.5,
+            "instant_stack_proximity": 5.0,
+            "upgrade_proximity": 2.5,
+            "exit_redundancy": 2.0,
+            "is_stacked_bonus": 8.0
         }
         self.load_weights()
 
@@ -71,7 +67,6 @@ class DeepLinearAgent:
         try:
             with open(self.weights_path, "r") as f:
                 self.weights.update(json.load(f))
-            logger.info("Successfully loaded updated ML weights from disk.")
         except Exception:
             pass
 
@@ -83,11 +78,9 @@ class DeepLinearAgent:
             pass
 
     def evaluate_features(self, features: Dict[str, float]) -> float:
-        """Computes continuous Q-Value approximation: Q(s,a) = w * f(s,a)"""
         return sum(self.weights.get(k, 0.0) * v for k, v in features.items())
 
     def learn_step(self, prev_features: Dict[str, float], reward: float, max_next_q: float):
-        """Applies SARSA/TD-Learning update rule: w = w + alpha * TD_error * f(s,a)"""
         old_q = self.evaluate_features(prev_features)
         td_error = (reward + self.gamma * max_next_q) - old_q
         
@@ -96,16 +89,9 @@ class DeepLinearAgent:
                 self.weights[k] += self.alpha * td_error * v
         self.save_weights()
 
-# ==============================================================================
-# ALGORITHMIC SPATIAL ENGINE & STATE PREDICTOR
-# ==============================================================================
+
 def is_reverse_direction(direction: Direction, current_direction: Direction) -> bool:
     return _REVERSE_DIRECTIONS.get(direction) == current_direction
-
-def _manhattan_distance(a: Coord, b: Coord, size: Tuple[int, int]) -> int:
-    dx = abs(a[0] - b[0])
-    dy = abs(a[1] - b[1])
-    return min(dx, size[0] - dx) + min(dy, size[1] - dy)
 
 def _normalize_coord(value) -> Optional[Coord]:
     if isinstance(value, (list, tuple)) and len(value) == 2:
@@ -161,7 +147,7 @@ def _compute_voronoi_territory(my_next_head: Coord, other_snakes: List[List[Coor
         if cell not in opp_dist or d < opp_dist[cell]:
             my_territory += 1
 
-    return float(my_territory) / (width * height)
+    return float(my_territory) / max(1, (width * height))
 
 def _bfs_distance_to_targets(start_pos: Coord, targets: List[Coord], obstacle_cells: Set[Coord], width: int, height: int) -> int:
     if not targets: return 999
@@ -184,8 +170,9 @@ def _bfs_distance_to_targets(start_pos: Coord, targets: List[Coord], obstacle_ce
                 queue.append((nxt, dist + 1))
     return 999
 
+
 # ==============================================================================
-# ADVANCED PIPELINE CONTROL MATRIX
+# UPGRADED PROCESS LOGIC: PROCESSED FOR OVERLAPPING STACK NODES
 # ==============================================================================
 def process_tactical_step(
     head: Coord,
@@ -200,28 +187,40 @@ def process_tactical_step(
 ) -> Tuple[Direction, Dict[str, float]]:
     width, height = field_size
     
-    # ADVANCED STATE CHECK: Is our snake currently condensed/stacked on one single node?
-    is_fully_stacked = len(set(my_body)) == 1
+    # Check if we are completely compressed onto a single square
+    unique_my_nodes = set(my_body)
+    is_fully_stacked = len(unique_my_nodes) == 1
 
-    # Populate obstacles cleanly. 
-    # CRITICAL INVERSION: If we are fully stacked, our own body nodes are NOT obstacles,
-    # because they fold into our position node entirely! We can step freely out.
     obstacle_cells = set()
+    
+    # CRITICAL FIX FOR OVERLAPPING BLOCKS:
+    # If our body segments are completely overlapped on our head coordinate, 
+    # we MUST exclude our own location from the obstacles entirely, allowing us to move outwards.
     if not is_fully_stacked:
-        obstacle_cells.update(my_body[:-1])
-        
+        # Only add segments that are not currently under our head position
+        for seg in my_body[:-1]:
+            if seg != head:
+                obstacle_cells.add(seg)
+                
+    # Normalize enemy body overlaps (don't lock up if they spawn completely compressed too)
     for s in other_snakes:
-        if s: obstacle_cells.update(s[:-1])
+        if s:
+            opp_head = s[0]
+            for seg in s[:-1]:
+                if seg != opp_head:
+                    obstacle_cells.add(seg)
+
     for ds in dead_snakes:
         if ds: obstacle_cells.update(ds)
 
-    # Danger buffers: Any cell near an enemy head threatens a slice.
+    # Core Threat Boundary Mapping
     danger_zones = set()
     for s in other_snakes:
         if not s: continue
-        danger_zones.add(s[0])
+        opp_h = s[0]
+        danger_zones.add(opp_h)
         for v in _DIRECTION_VECTORS.values():
-            danger_zones.add(((s[0][0] + v[0]) % width, (s[0][1] + v[1]) % height))
+            danger_zones.add(((opp_h[0] + v[0]) % width, (opp_h[1] + v[1]) % height))
 
     best_direction = current_direction
     best_q_val = -float("inf")
@@ -235,7 +234,6 @@ def process_tactical_step(
         if next_pos in obstacle_cells:
             continue
 
-        # Extract normalized state vectors for Machine Learning evaluation
         features = {
             "lethal_slice_risk": 1.0 if (next_pos in danger_zones and not is_fully_stacked) else 0.0,
             "voronoi_territory": _compute_voronoi_territory(next_pos, other_snakes, obstacle_cells, width, height),
@@ -245,7 +243,6 @@ def process_tactical_step(
             "is_stacked_bonus": 1.0 if is_fully_stacked else 0.0
         }
 
-        # Feature Mapping: Quantize distances to safe inversion distributions
         if stacks:
             d_stack = _bfs_distance_to_targets(next_pos, stacks, obstacle_cells, width, height)
             features["instant_stack_proximity"] = 1.0 / (d_stack + 1)
@@ -260,7 +257,6 @@ def process_tactical_step(
             if neigh not in obstacle_cells: free_exits += 1
         features["exit_redundancy"] = free_exits / 4.0
 
-        # Run DQN/Linear Function Inference Engine
         q_value = agent.evaluate_features(features)
 
         if q_value > best_q_val:
@@ -268,12 +264,21 @@ def process_tactical_step(
             best_direction = direction
             chosen_features = features
 
+    if best_q_val == -float("inf"):
+        # Last resort escape: ignore all features, just find a non-obstacle block
+        for direction, vector in _DIRECTION_VECTORS.items():
+            if is_reverse_direction(direction, current_direction): continue
+            next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
+            if next_pos not in obstacle_cells:
+                return direction
+        return current_direction
+
     return best_direction, chosen_features
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Deep RL Sword Evasion Bot")
-    parser.add_argument("team_name", help="Snake identifier string")
+    parser = argparse.ArgumentParser(description="Overlapped Safe Deep RL Bot")
+    parser.add_argument("team_name", help="Snake identity string")
     parser.add_argument("game_name", help="Match lobby identifier")
     parser.add_argument("--password", default="test")
     parser.add_argument("--base_url", default="http://localhost:3030")
@@ -299,7 +304,7 @@ if __name__ == "__main__":
 
     try:
         while alive:
-            time.sleep(0.015) # Optimized high-speed execution loop
+            time.sleep(0.015)
             
             field = None
             with game_buffer.lock:
@@ -316,7 +321,6 @@ if __name__ == "__main__":
             width, height = getattr(field, "size", (15, 15))
             current_length = len(my_snake.body)
 
-            # --- PARSE ITEMS IN REAL-TIME ---
             stacks = []
             upgrades = []
             raw_items = getattr(field, "items", None)
@@ -334,7 +338,6 @@ if __name__ == "__main__":
             other_snakes = [s.body for name, s in field.snakes.items() if name != args.team_name and s.alive]
             dead_snakes = [s.body for name, s in field.snakes.items() if name != args.team_name and not s.alive]
 
-            # Evaluate direction via agent policy inference
             next_direction, current_features = process_tactical_step(
                 head=head,
                 current_direction=currentDirection,
@@ -347,16 +350,14 @@ if __name__ == "__main__":
                 agent=agent
             )
 
-            # Machine Learning Feedback Step (Calculate reward and optimize weights)
+            # Temporal-Difference Learning Execution Step
             if prev_features is not None and prev_length is not None:
-                # Reward matrix optimized to punish length-shortening and reward stacking/growing
-                reward = 0.1 # Constant step survival bonus
+                reward = 0.1
                 if current_length < prev_length:
-                    reward -= 50.0 # Absolute catastrophic penalty for getting sliced/shortened!
+                    reward -= 60.0  # Heavily weighted penalty for losing tail length
                 if len(set(my_snake.body)) == 1:
-                    reward += 15.0 # Positive reinforcement for securing a safe stacked configuration
+                    reward += 20.0  # Heavily reward successful instant stack execution
 
-                # Find max Q-value from the current state features
                 max_next_q = agent.evaluate_features(current_features)
                 agent.learn_step(prev_features, reward, max_next_q)
 
