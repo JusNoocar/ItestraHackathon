@@ -43,23 +43,24 @@ def network_receiver_pipeline(api: SnakeFieldAPI, buffer: LowLatencyGameBuffer, 
                     buffer.field = f
         except Exception:
             pass
-        time.sleep(0.008)
+        time.sleep(0.005) # Hyper-fast 5ms network sampling for 12-player matches
 
 
 class DeepLinearAgent:
-    def __init__(self, alpha: float = 0.05, gamma: float = 0.9, weights_path: str = "dqn_weights.json"):
+    """RL Inference engine tracking weights customized for high-density item configurations."""
+    def __init__(self, alpha: float = 0.05, gamma: float = 0.95, weights_path: str = "dqn_12player_weights.json"):
         self.alpha = alpha
         self.gamma = gamma
         self.weights_path = weights_path
         
-        # Defensive weights tuned for high-frequency 4-tick item environments
         self.weights = {
-            "lethal_slice_risk": -25.0,
-            "voronoi_territory": 3.5,
-            "instant_stack_proximity": 5.0,
-            "upgrade_proximity": 2.5,
-            "exit_redundancy": 2.0,
-            "is_stacked_bonus": 8.0
+            "lethal_slice_risk": -30.0,      # Prioritize threat evasion
+            "poison_density": -20.0,         # Strongly avoid BadApples
+            "voronoi_territory": 5.0,        # Secure open spaces
+            "instant_stack_proximity": 6.0,  # Grab stacks for evasion/cleanup
+            "upgrade_proximity": 4.0,        # Hunt swords and speed boosts
+            "exit_redundancy": 3.0,          # Maintain escape options
+            "is_stacked_bonus": 10.0         # Highly value safety loops
         }
         self.load_weights()
 
@@ -171,9 +172,6 @@ def _bfs_distance_to_targets(start_pos: Coord, targets: List[Coord], obstacle_ce
     return 999
 
 
-# ==============================================================================
-# UPGRADED PROCESS LOGIC: PROCESSED FOR OVERLAPPING STACK NODES
-# ==============================================================================
 def process_tactical_step(
     head: Coord,
     current_direction: Direction,
@@ -183,37 +181,34 @@ def process_tactical_step(
     dead_snakes: List[List[Coord]],
     stacks: List[Coord],
     upgrades: List[Coord],
+    bad_apples: List[Coord],
     agent: DeepLinearAgent
 ) -> Tuple[Direction, Dict[str, float]]:
     width, height = field_size
     
-    # Check if we are completely compressed onto a single square
+    # Accurate state processing for overlapping body configurations
     unique_my_nodes = set(my_body)
     is_fully_stacked = len(unique_my_nodes) == 1
 
     obstacle_cells = set()
-    
-    # CRITICAL FIX FOR OVERLAPPING BLOCKS:
-    # If our body segments are completely overlapped on our head coordinate, 
-    # we MUST exclude our own location from the obstacles entirely, allowing us to move outwards.
     if not is_fully_stacked:
-        # Only add segments that are not currently under our head position
         for seg in my_body[:-1]:
             if seg != head:
                 obstacle_cells.add(seg)
                 
-    # Normalize enemy body overlaps (don't lock up if they spawn completely compressed too)
     for s in other_snakes:
         if s:
             opp_head = s[0]
-            for seg in s[:-1]:
-                if seg != opp_head:
-                    obstacle_cells.add(seg)
+            # Account for other bots being stacked at spawn coordinates
+            if len(set(s)) > 1:
+                for seg in s[:-1]:
+                    if seg != opp_head:
+                        obstacle_cells.add(seg)
 
     for ds in dead_snakes:
         if ds: obstacle_cells.update(ds)
 
-    # Core Threat Boundary Mapping
+    # Danger tracking: Calculate proximity threat from all 11 competing heads
     danger_zones = set()
     for s in other_snakes:
         if not s: continue
@@ -236,6 +231,7 @@ def process_tactical_step(
 
         features = {
             "lethal_slice_risk": 1.0 if (next_pos in danger_zones and not is_fully_stacked) else 0.0,
+            "poison_density": 1.0 if next_pos in bad_apples else 0.0,
             "voronoi_territory": _compute_voronoi_territory(next_pos, other_snakes, obstacle_cells, width, height),
             "instant_stack_proximity": 0.0,
             "upgrade_proximity": 0.0,
@@ -265,7 +261,6 @@ def process_tactical_step(
             chosen_features = features
 
     if best_q_val == -float("inf"):
-        # Last resort escape: ignore all features, just find a non-obstacle block
         for direction, vector in _DIRECTION_VECTORS.items():
             if is_reverse_direction(direction, current_direction): continue
             next_pos = ((head[0] + vector[0]) % width, (head[1] + vector[1]) % height)
@@ -277,8 +272,8 @@ def process_tactical_step(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Overlapped Safe Deep RL Bot")
-    parser.add_argument("team_name", help="Snake identity string")
+    parser = argparse.ArgumentParser(description="12-Player Grand Arena Combat Bot")
+    parser.add_argument("team_name", help="Snake identifier string")
     parser.add_argument("game_name", help="Match lobby identifier")
     parser.add_argument("--password", default="test")
     parser.add_argument("--base_url", default="http://localhost:3030")
@@ -304,7 +299,7 @@ if __name__ == "__main__":
 
     try:
         while alive:
-            time.sleep(0.015)
+            time.sleep(0.012) # Faster computation cycle to keep up with multi-snake actions
             
             field = None
             with game_buffer.lock:
@@ -318,11 +313,12 @@ if __name__ == "__main__":
                 break
 
             head = my_snake.body[0]
-            width, height = getattr(field, "size", (15, 15))
+            width, height = getattr(field, "size", (41, 41))
             current_length = len(my_snake.body)
 
             stacks = []
             upgrades = []
+            bad_apples = []
             raw_items = getattr(field, "items", None)
             
             if raw_items is not None:
@@ -334,6 +330,8 @@ if __name__ == "__main__":
                             stacks.append(normalized)
                         elif kind in ["Sword", "Speedboost", "Apple", "Star"]:
                             upgrades.append(normalized)
+                        elif kind == "BadApple":
+                            bad_apples.append(normalized)
 
             other_snakes = [s.body for name, s in field.snakes.items() if name != args.team_name and s.alive]
             dead_snakes = [s.body for name, s in field.snakes.items() if name != args.team_name and not s.alive]
@@ -347,16 +345,17 @@ if __name__ == "__main__":
                 dead_snakes=dead_snakes,
                 stacks=stacks,
                 upgrades=upgrades,
+                bad_apples=bad_apples,
                 agent=agent
             )
 
-            # Temporal-Difference Learning Execution Step
+            # High-Dimensional Spatial Learning Feedback Loop
             if prev_features is not None and prev_length is not None:
                 reward = 0.1
                 if current_length < prev_length:
-                    reward -= 60.0  # Heavily weighted penalty for losing tail length
+                    reward -= 75.0  # High penalty for tail contraction
                 if len(set(my_snake.body)) == 1:
-                    reward += 20.0  # Heavily reward successful instant stack execution
+                    reward += 25.0  # Reward safe stacked states
 
                 max_next_q = agent.evaluate_features(current_features)
                 agent.learn_step(prev_features, reward, max_next_q)
